@@ -313,7 +313,7 @@ def select_course_command(
         raise typer.Exit(1)
 
 
-@app.command(help="手动退课。优先使用已选记录 ID 退课；会产生真实操作，需要 --yes 确认。")
+@app.command(help="手动退课。使用课程 ID 退课；会产生真实操作，需要 --yes 确认。")
 def drop(
     course_id: int = typer.Argument(..., help="要退选的课程 ID。"),
     username: Optional[str] = typer.Option(None, "--user", help="只为指定账号退课。"),
@@ -332,8 +332,8 @@ def drop(
             selected_course = selected_course_for_user(store, user, course_id)
             if not selected_course:
                 raise RuntimeError(f"course {course_id} is not selected for {mask(user)}; run autoboya selected --user {user}")
-            drop_id = selected_record_id(selected_course) or course_id
-            call_with_reauth(store, user, lambda client: client.drop_course(drop_id), captcha_provider=prompt_captcha)
+            call_with_reauth(store, user, lambda client: client.drop_course(course_id), captcha_provider=prompt_captcha)
+            refresh_current_user_cache(store, user)
             typer.echo(f"Dropped {course_id} for {mask(user)}")
         except Exception as exc:
             typer.echo(f"Failed to drop {course_id} for {mask(user)}: {exc}", err=True)
@@ -423,15 +423,15 @@ def selected_course_for_user(store: AutoBoyaStore, username: str, course_id: int
     return None
 
 
-def selected_record_id(course) -> int | None:
-    for key in ["chosenCourseId", "selectedId", "chosenId"]:
-        value = course.raw.get(key) if isinstance(course.raw, dict) else None
-        try:
-            if value is not None:
-                return int(value)
-        except Exception:
-            continue
-    return None
+def refresh_current_user_cache(store: AutoBoyaStore, user: str) -> None:
+    cache = CourseCache(store)
+
+    def refresh(client: BykcClient) -> None:
+        start, end = current_semester_window(client.get_all_config())
+        cache.save_selected(user, client.query_chosen_courses(start, end))
+        cache.save_statistics(user, client.query_statistics())
+
+    call_with_reauth(store, user, refresh, captcha_provider=prompt_captcha)
 
 
 def current_semester_window(config: dict[str, object]) -> tuple[str, str]:

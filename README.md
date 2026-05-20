@@ -87,7 +87,7 @@ autoboya signout <course_id> --user <username>
 autoboya signout <course_id> --all-users
 ```
 
-`sign` and `signout` require the course to already be selected. Use `select` first, then sign during the configured sign window. `drop` accepts a course ID and uses the cached selected-record ID when available.
+`sign` and `signout` require the course to already be selected. Use `select` first, then sign during the configured sign window. `drop` accepts a course ID and refreshes the selected-course cache after a successful drop.
 
 Diagnostics:
 

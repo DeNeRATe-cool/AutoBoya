@@ -48,7 +48,7 @@ def test_sign_requires_selected_course_before_api_call(monkeypatch, tmp_path):
     assert not called
 
 
-def test_drop_uses_selected_record_id_when_available(monkeypatch, tmp_path):
+def test_drop_uses_course_id_and_refreshes_cache(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
     store = AutoBoyaStore()
     store.init()
@@ -71,11 +71,21 @@ def test_drop_uses_selected_record_id_when_available(monkeypatch, tmp_path):
         def drop_course(self, course_id):
             dropped.append(course_id)
 
+        def get_all_config(self):
+            return {"data": {"semester": [{"semesterStartDate": "2026-03-01", "semesterEndDate": "2026-06-21"}]}}
+
+        def query_chosen_courses(self, start, end):
+            return []
+
+        def query_statistics(self):
+            return {}
+
     monkeypatch.setattr(cli, "call_with_reauth", lambda store, username, operation, captcha_provider=None: operation(FakeClient()))
     result = CliRunner().invoke(app, ["drop", "9580", "--user", "test-user", "--yes"])
 
     assert result.exit_code == 0
-    assert dropped == [3972171]
+    assert dropped == [9580]
+    assert store.load_json("cache/selected.json")["test-user"] == []
 
 
 def test_manual_select_calls_select_course(monkeypatch, tmp_path):
