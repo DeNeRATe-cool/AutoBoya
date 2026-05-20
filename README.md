@@ -16,6 +16,8 @@ automatic course selection, check-in, and check-out.
 
 ## Quickstart
 
+PyPI package: [`autoboya`](https://pypi.org/project/autoboya/) (`0.1.0`).
+
 ```bash
 # 1) Install from PyPI
 pip install autoboya
