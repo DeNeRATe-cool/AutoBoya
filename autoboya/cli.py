@@ -14,17 +14,17 @@ from .auth import AuthClient
 from .bykc import BykcClient, parse_course
 from .cache import CourseCache, preview_auto_select_courses
 from .config import LOG_FILE
-from .exceptions import CaptchaRequired, MissingSignPoint
+from .exceptions import CaptchaRequired, LoginError, MissingSignPoint
 from .logging import configure_logging
 from .models import UserRecord
 from .rules import classify_selected_courses, random_point_in_radius
 from .scheduler import AutomationRunner
 from .storage import AutoBoyaStore, try_get_keyring_password, try_store_keyring_password
 
-app = typer.Typer(no_args_is_help=True)
-user_app = typer.Typer(no_args_is_help=True)
-courses_app = typer.Typer(no_args_is_help=True)
-logs_app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+user_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+courses_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+logs_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 app.add_typer(user_app, name="user")
 app.add_typer(courses_app, name="courses")
 app.add_typer(logs_app, name="logs")
@@ -92,11 +92,15 @@ def login(username: str) -> None:
     client = AuthClient(store)
     captcha_value: str | None = None
     try:
-        client.preflight_login()
-    except CaptchaRequired as exc:
-        typer.echo(f"CAPTCHA image: {exc.challenge.image_path}")
-        captcha_value = typer.prompt("CAPTCHA")
-    session = client.login(username, password, captcha=captcha_value)
+        try:
+            client.preflight_login()
+        except CaptchaRequired as exc:
+            typer.echo(f"CAPTCHA image: {exc.challenge.image_path}")
+            captcha_value = typer.prompt("CAPTCHA")
+        session = client.login(username, password, captcha=captcha_value)
+    except LoginError as exc:
+        typer.echo(f"Login failed: {exc}", err=True)
+        raise typer.Exit(1) from None
     store.save_json(f"sessions/{username}.json", {"bykc_token": session.bykc_token}, mode=0o600)
     typer.echo(f"Logged in {mask(username)}")
 

@@ -143,12 +143,23 @@ class AuthClient:
         self.client.get(self.upstream(UC_ACTIVATE))
 
     def acquire_bykc_token(self) -> str | None:
-        response = self.client.get(self.upstream(BYKC_CAS))
-        token = extract_token(str(response.url)) or extract_token(response.headers.get("location", ""))
+        token = self._follow_for_token(self.upstream(BYKC_CAS))
         if token:
             return token
-        fallback = self.client.get(self.upstream(BYKC_CAS_EMPTY_TOKEN))
-        return extract_token(str(fallback.url)) or extract_token(fallback.headers.get("location", ""))
+        return self._follow_for_token(self.upstream(BYKC_CAS_EMPTY_TOKEN))
+
+    def _follow_for_token(self, url: str, max_redirects: int = 10) -> str | None:
+        current_url = url
+        for _ in range(max_redirects + 1):
+            response = self.client.get(current_url)
+            token = extract_token(str(response.url)) or extract_token(response.headers.get("location", ""))
+            if token:
+                return token
+            location = response.headers.get("location")
+            if not (300 <= response.status_code <= 399 and location):
+                return None
+            current_url = urljoin(str(response.url), location)
+        return None
 
 
 def detect_captcha(html: str) -> tuple[str, str] | None:
