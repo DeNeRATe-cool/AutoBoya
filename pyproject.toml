@@ -5,8 +5,25 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "autoboya"
 version = "0.1.0"
-description = "BUAA Boya WebVPN CLI automation tool"
+description = "BUAA Boya WebVPN CLI for course cache, autonomous-sign course automation, and check-in/out workflows"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "DeNeRATe-cool" },
+]
+keywords = ["buaa", "boya", "webvpn", "cli", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Utilities",
+]
 dependencies = [
   "cryptography>=42",
   "httpx>=0.27",
@@ -22,6 +39,15 @@ dev = [
 
 [project.scripts]
 autoboya = "autoboya.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/DeNeRATe-cool/AutoBoya"
+Repository = "https://github.com/DeNeRATe-cool/AutoBoya"
+Issues = "https://github.com/DeNeRATe-cool/AutoBoya/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autoboya*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
