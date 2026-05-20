@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.console import Console
+from rich.table import Table
 
 from . import __version__
 from .auth import AuthClient
@@ -19,6 +21,7 @@ from .logging import configure_logging
 from .models import UserRecord
 from .rules import classify_selected_courses, random_point_in_radius
 from .scheduler import AutomationRunner
+from .session import call_with_reauth, ensure_bykc_client
 from .storage import AutoBoyaStore, try_get_keyring_password, try_store_keyring_password
 
 HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
@@ -116,18 +119,26 @@ def courses_refresh(username: Optional[str] = typer.Option(None, "--user")) -> N
     store = AutoBoyaStore()
     store.init()
     user = username or first_username(store)
-    client = bykc_client_for(store, user)
     cache = CourseCache(store)
     try:
-        courses = client.query_courses()
-        cache.save_courses(courses)
-        start, end = current_semester_window(client.get_all_config())
-        selected = client.query_chosen_courses(start, end)
-        cache.save_selected(user, selected)
-        cache.save_statistics(user, client.query_statistics())
+        def refresh(client: BykcClient) -> int:
+            courses = client.query_courses()
+            cache.save_courses(courses)
+            start, end = current_semester_window(client.get_all_config())
+            selected = client.query_chosen_courses(start, end)
+            cache.save_selected(user, selected)
+            cache.save_statistics(user, client.query_statistics())
+            return len(courses)
+
+        count = call_with_reauth(store, user, refresh, captcha_provider=prompt_captcha)
     except Exception as exc:
         fail_command(exc)
-    typer.echo(f"Refreshed {len(courses)} courses using {mask(user)}")
+    typer.echo(f"Refreshed {count} courses using {mask(user)}")
+
+
+def prompt_captcha(challenge) -> str:
+    typer.echo(f"CAPTCHA image: {challenge.image_path}")
+    return typer.prompt("CAPTCHA")
 
 
 @courses_app.command("list")
@@ -188,14 +199,28 @@ def selected(username: Optional[str] = typer.Option(None, "--user"), as_json: bo
         courses = [parse_course(item) for item in raw] if isinstance(raw, list) else []
         grouped = classify_selected_courses(courses, datetime.now())
         output = {key: [course_to_view(course) for course in value] for key, value in grouped.items()}
+        if not as_json:
+            print_selected_table({username: grouped}, include_user=False)
+            return
     else:
         output = raw
+        if not as_json:
+            grouped_by_user = {}
+            if isinstance(raw, dict):
+                for user, items in raw.items():
+                    courses = [parse_course(item) for item in items] if isinstance(items, list) else []
+                    grouped_by_user[user] = classify_selected_courses(courses, datetime.now())
+            print_selected_table(grouped_by_user, include_user=True)
+            return
     typer.echo(json.dumps(output, ensure_ascii=False, indent=2) if as_json else json.dumps(output, ensure_ascii=False))
 
 
 @app.command()
 def stats(username: Optional[str] = typer.Option(None, "--user"), as_json: bool = typer.Option(False, "--json")) -> None:
     data = CourseCache(AutoBoyaStore()).load_statistics(username)
+    if not as_json:
+        print_stats_table(data, username=username)
+        return
     typer.echo(json.dumps(data, ensure_ascii=False, indent=2 if as_json else None))
 
 
@@ -228,7 +253,7 @@ def drop(course_id: int, username: Optional[str] = typer.Option(None, "--user"),
     failed = False
     for user in users:
         try:
-            bykc_client_for(store, user).drop_course(course_id)
+            call_with_reauth(store, user, lambda client: client.drop_course(course_id), captcha_provider=prompt_captcha)
             typer.echo(f"Dropped {course_id} for {mask(user)}")
         except Exception as exc:
             typer.echo(f"Failed to drop {course_id} for {mask(user)}: {exc}", err=True)
@@ -281,7 +306,12 @@ def manual_sign(course_id: int, sign_type: int, username: str | None, all_users:
     failed = False
     for user in users:
         try:
-            bykc_client_for(store, user).sign_course(course_id, lat, lng, sign_type)
+            call_with_reauth(
+                store,
+                user,
+                lambda client: client.sign_course(course_id, lat, lng, sign_type),
+                captcha_provider=prompt_captcha,
+            )
             typer.echo(f"{action} {course_id} for {mask(user)}")
         except Exception as exc:
             typer.echo(f"Failed to {action} {course_id} for {mask(user)}: {exc}", err=True)
@@ -322,20 +352,120 @@ def token_for(store: AutoBoyaStore, username: str) -> str:
 
 
 def bykc_client_for(store: AutoBoyaStore, username: str) -> BykcClient:
-    session = store.load_json(f"sessions/{username}.json", {})
-    token = session.get("bykc_token") if isinstance(session, dict) else None
-    cookies = session.get("cookies") if isinstance(session, dict) else None
-    if not token:
-        raise typer.BadParameter(f"No Boya token for {mask(username)}; run autoboya login {username}")
-    if not isinstance(cookies, list):
-        raise typer.BadParameter(f"Stored session for {mask(username)} has no WebVPN cookies; run autoboya login {username} again")
-    return BykcClient(str(token), cookies=cookies)
+    try:
+        return ensure_bykc_client(store, username)
+    except LoginError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def fail_command(exc: Exception) -> None:
     message = str(exc) or exc.__class__.__name__
     typer.echo(f"Command failed: {message}", err=True)
     raise typer.Exit(1) from None
+
+
+def console() -> Console:
+    return Console(file=sys.stdout, force_terminal=False, color_system=None, width=160)
+
+
+def print_selected_table(grouped_by_user: dict[str, dict[str, list[object]]], include_user: bool) -> None:
+    table = Table(show_header=True, header_style="bold")
+    if include_user:
+        table.add_column("用户")
+    table.add_column("状态")
+    table.add_column("课程ID", justify="right")
+    table.add_column("课程名称")
+    table.add_column("类型")
+    table.add_column("签到方式")
+    table.add_column("课程时间")
+    table.add_column("地点")
+    rows = 0
+    for username, grouped in grouped_by_user.items():
+        for status in ["未开始上课", "已开始上课", "未知"]:
+            for course in grouped.get(status, []):
+                row = [
+                    status,
+                    str(course.id),
+                    course.name,
+                    course.category or "-",
+                    course.sign_method,
+                    format_time_range(course.course_start, course.course_end),
+                    course.location or "-",
+                ]
+                if include_user:
+                    row.insert(0, mask(username))
+                table.add_row(*row)
+                rows += 1
+    if rows == 0:
+        empty = ["-", "-", "No selected courses", "-", "-", "-", "-"]
+        if include_user:
+            empty.insert(0, "-")
+        table.add_row(*empty)
+    console().print(table)
+
+
+def print_stats_table(data: dict[str, object], username: str | None = None) -> None:
+    table = Table(show_header=True, header_style="bold")
+    include_user = username is None
+    if include_user:
+        table.add_column("用户")
+    table.add_column("类型")
+    table.add_column("要求", justify="right")
+    table.add_column("已选", justify="right")
+    table.add_column("完成", justify="right")
+    table.add_column("未通过", justify="right")
+    table.add_column("未完成", justify="right")
+    table.add_column("有效数", justify="right")
+
+    rows = 0
+    stats_by_user = {username: data} if username else data
+    if isinstance(stats_by_user, dict):
+        for user, stats in stats_by_user.items():
+            if not isinstance(stats, dict):
+                continue
+            valid_count = stats.get("validCount", "-")
+            for category, item in iter_stat_rows(stats):
+                row = [
+                    category,
+                    str(item.get("assessmentCount", "-")),
+                    str(item.get("selectAssessmentCount", "-")),
+                    str(item.get("completeAssessmentCount", "-")),
+                    str(item.get("failAssessmentCount", "-")),
+                    str(item.get("undoneAssessmentCount", "-")),
+                    str(valid_count),
+                ]
+                if include_user:
+                    row.insert(0, mask(str(user)))
+                table.add_row(*row)
+                rows += 1
+    if rows == 0:
+        empty = ["No statistics", "-", "-", "-", "-", "-", "-"]
+        if include_user:
+            empty.insert(0, "-")
+        table.add_row(*empty)
+    console().print(table)
+
+
+def iter_stat_rows(stats: dict[str, object]):
+    statistical = stats.get("statistical")
+    if not isinstance(statistical, dict):
+        return
+    for categories in statistical.values():
+        if not isinstance(categories, dict):
+            continue
+        for key, value in categories.items():
+            if isinstance(value, dict):
+                yield label_after_pipe(str(key)), value
+
+
+def label_after_pipe(value: str) -> str:
+    return value.split("|", 1)[1] if "|" in value else value
+
+
+def format_time_range(start: str | None, end: str | None) -> str:
+    if start and end:
+        return f"{start} - {end}"
+    return start or end or "-"
 
 
 def course_to_view(course) -> dict[str, object]:

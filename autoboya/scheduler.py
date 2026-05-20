@@ -3,15 +3,20 @@ from __future__ import annotations
 import os
 import random
 import time
+import logging
 from datetime import datetime
 from typing import Iterable
 
-from .bykc import BykcClient
 from .cache import CourseCache
 from .config import ACTION_JOURNAL_FILE, RUN_PID_FILE, STOP_FILE
+from .exceptions import SessionExpired
+from .logging import log_event
 from .models import ActionResult, AutomationDecision, BoyaCourse, UserRecord
 from .rules import is_auto_select_candidate, random_point_in_radius, sign_window_for
+from .session import ensure_bykc_client, force_login_bykc_client
 from .storage import AutoBoyaStore
+
+logger = logging.getLogger(__name__)
 
 
 def decide_actions(
@@ -50,10 +55,13 @@ class AutomationRunner:
         try:
             while not stop.exists():
                 now = time.time()
-                if now - last_refresh >= 3600:
-                    self.refresh_once()
-                    last_refresh = now
-                self.execute_decisions(self.scan_once())
+                try:
+                    if now - last_refresh >= 3600:
+                        self.refresh_once()
+                        last_refresh = now
+                    self.execute_decisions(self.scan_once())
+                except Exception as exc:
+                    log_event(logger, logging.ERROR, "automation loop failed", error=exc)
                 time.sleep(60)
         finally:
             pid = self.store.path(RUN_PID_FILE)
@@ -69,14 +77,19 @@ class AutomationRunner:
         if not users:
             return
         pool_user = random.choice(users)
-        pool_client = self.bykc_client_for(pool_user.username)
-        config = pool_client.get_all_config()
-        self.cache.save_courses(pool_client.query_courses())
+        config, courses = self._with_reauth(
+            pool_user.username,
+            lambda client: (client.get_all_config(), client.query_courses()),
+        )
+        self.cache.save_courses(courses)
         start, end = current_semester_window(config)
         for user in users:
-            client = self.bykc_client_for(user.username)
-            self.cache.save_selected(user.username, client.query_chosen_courses(start, end))
-            self.cache.save_statistics(user.username, client.query_statistics())
+            selected, statistics = self._with_reauth(
+                user.username,
+                lambda client: (client.query_chosen_courses(start, end), client.query_statistics()),
+            )
+            self.cache.save_selected(user.username, selected)
+            self.cache.save_statistics(user.username, statistics)
 
     def scan_once(self) -> list[AutomationDecision]:
         courses = self.cache.parsed_courses()
@@ -119,7 +132,7 @@ class AutomationRunner:
 
     def _select_for_user(self, user: UserRecord, course_id: int) -> ActionResult:
         try:
-            self.bykc_client_for(user.username).select_course(course_id)
+            self._with_reauth(user.username, lambda client: client.select_course(course_id))
             return ActionResult(user.username, "select", course_id, True, "selected")
         except Exception as exc:
             return ActionResult(user.username, "select", course_id, False, str(exc))
@@ -131,7 +144,7 @@ class AutomationRunner:
         lat, lng = random_point_in_radius(float(point["lat"]), float(point["lng"]), float(point.get("radius") or 8))
         sign_type = 1 if action == "sign" else 2
         try:
-            self.bykc_client_for(username).sign_course(course.id, lat, lng, sign_type)
+            self._with_reauth(username, lambda client: client.sign_course(course.id, lat, lng, sign_type))
             return ActionResult(username, action, course.id, True, "signed")
         except Exception as exc:
             return ActionResult(username, action, course.id, False, str(exc))
@@ -147,22 +160,13 @@ class AutomationRunner:
             if isinstance(items, list)
         }
 
-    def token_for(self, username: str) -> str:
-        session = self.store.load_json(f"sessions/{username}.json", {})
-        token = session.get("bykc_token") if isinstance(session, dict) else None
-        if not token:
-            raise RuntimeError(f"No Boya token for {username}")
-        return token
-
-    def bykc_client_for(self, username: str) -> BykcClient:
-        session = self.store.load_json(f"sessions/{username}.json", {})
-        token = session.get("bykc_token") if isinstance(session, dict) else None
-        cookies = session.get("cookies") if isinstance(session, dict) else None
-        if not token:
-            raise RuntimeError(f"No Boya token for {username}")
-        if not isinstance(cookies, list):
-            raise RuntimeError(f"Stored session for {username} has no WebVPN cookies; run autoboya login again")
-        return BykcClient(str(token), cookies=cookies)
+    def _with_reauth(self, username: str, operation):
+        client = ensure_bykc_client(self.store, username)
+        try:
+            return operation(client)
+        except SessionExpired:
+            client = force_login_bykc_client(self.store, username)
+            return operation(client)
 
 
 def journal_key(username: str, action: str, course_id: int, when: datetime | None = None) -> str:

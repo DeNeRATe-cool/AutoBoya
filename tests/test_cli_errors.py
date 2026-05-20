@@ -31,7 +31,7 @@ def test_login_error_is_user_facing_without_traceback(monkeypatch, tmp_path):
     assert "secret" not in result.output
 
 
-def test_refresh_with_legacy_session_asks_for_relogin(monkeypatch, tmp_path):
+def test_refresh_with_missing_password_is_user_facing(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
     store = cli.AutoBoyaStore()
     store.init()
@@ -40,17 +40,16 @@ def test_refresh_with_legacy_session_asks_for_relogin(monkeypatch, tmp_path):
 
     result = CliRunner().invoke(app, ["courses", "refresh", "--user", "test-user"])
 
-    assert result.exit_code == 2
-    assert "has no WebVPN cookies" in result.output
+    assert result.exit_code == 1
+    assert "No stored password" in result.output
     assert "Traceback" not in result.output
 
 
 def test_drop_api_error_is_user_facing(monkeypatch):
-    class FailingBykcClient:
-        def drop_course(self, course_id):
-            raise RuntimeError("course is not droppable")
+    def failing_call_with_reauth(store, username, operation, captcha_provider=None):
+        raise RuntimeError("course is not droppable")
 
-    monkeypatch.setattr(cli, "bykc_client_for", lambda store, username: FailingBykcClient())
+    monkeypatch.setattr(cli, "call_with_reauth", failing_call_with_reauth)
     result = CliRunner().invoke(app, ["drop", "123", "--user", "test-user", "--yes"])
 
     assert result.exit_code == 1
@@ -75,11 +74,10 @@ def test_sign_api_error_is_user_facing(monkeypatch, tmp_path):
         ],
     )
 
-    class FailingBykcClient:
-        def sign_course(self, course_id, lat, lng, sign_type):
-            raise SignWindowClosed("not in sign window")
+    def failing_call_with_reauth(store, username, operation, captcha_provider=None):
+        raise SignWindowClosed("not in sign window")
 
-    monkeypatch.setattr(cli, "bykc_client_for", lambda store, username: FailingBykcClient())
+    monkeypatch.setattr(cli, "call_with_reauth", failing_call_with_reauth)
     result = CliRunner().invoke(app, ["sign", "123", "--user", "test-user"])
 
     assert result.exit_code == 1

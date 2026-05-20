@@ -68,10 +68,26 @@ class BykcClient:
     def get_all_config(self) -> dict[str, Any]:
         return self.call("getAllConfig", {})
 
-    def query_courses(self, page_number: int = 1, page_size: int = 50) -> list[BoyaCourse]:
-        data = self.call("queryStudentSemesterCourseByPage", {"pageNumber": page_number, "pageSize": page_size})
-        content = (((data.get("data") or {}).get("content") or []) if isinstance(data, dict) else [])
-        return [parse_course(item) for item in content]
+    def query_course_page(self, page_number: int = 1, page_size: int = 100) -> dict[str, Any]:
+        return self.call("queryStudentSemesterCourseByPage", {"pageNumber": page_number, "pageSize": page_size})
+
+    def query_courses(self, page_number: int = 1, page_size: int = 100) -> list[BoyaCourse]:
+        courses: list[BoyaCourse] = []
+        current_page = page_number
+        while True:
+            data = self.query_course_page(current_page, page_size)
+            page_data = (data.get("data") or {}) if isinstance(data, dict) else {}
+            content = page_data.get("content") or []
+            courses.extend(parse_course(item) for item in content)
+            total_pages = parse_int(page_data.get("totalPages"))
+            if page_data.get("last") is True:
+                break
+            if total_pages is not None and current_page >= total_pages:
+                break
+            if not content:
+                break
+            current_page += 1
+        return courses
 
     def query_course_detail(self, course_id: int) -> BoyaCourse:
         data = self.call("queryCourseById", {"id": course_id})

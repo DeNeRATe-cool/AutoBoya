@@ -72,3 +72,37 @@ def test_html_login_page_response_is_session_expired():
 
     with pytest.raises(SessionExpired, match="WebVPN session"):
         client.query_courses()
+
+
+def test_query_courses_reads_all_pages():
+    payloads = [
+        {"status": "0", "data": {"content": [{"id": 1001, "courseName": "第一页"}], "totalPages": 2, "last": False}},
+        {"status": "0", "data": {"content": [{"id": 1002, "courseName": "第二页"}], "totalPages": 2, "last": True}},
+    ]
+    seen_payloads = []
+
+    class StaticCrypto:
+        def encrypt_request(self, payload):
+            from autoboya.crypto import EncryptedRequest
+
+            seen_payloads.append(payload)
+            return EncryptedRequest(body=b'"request"', headers={"Ak": "a", "Sk": "s", "Ts": "1"})
+
+        def decrypt_response(self, body):
+            return payloads.pop(0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='"response"')
+
+    client = BykcClient("token", http_client=httpx.Client(transport=httpx.MockTransport(handler)), use_vpn=False)
+    import autoboya.bykc as bykc_module
+
+    original = bykc_module.BykcCrypto
+    bykc_module.BykcCrypto = StaticCrypto
+    try:
+        courses = client.query_courses(page_size=100)
+    finally:
+        bykc_module.BykcCrypto = original
+
+    assert [course.id for course in courses] == [1001, 1002]
+    assert seen_payloads == [{"pageNumber": 1, "pageSize": 100}, {"pageNumber": 2, "pageSize": 100}]

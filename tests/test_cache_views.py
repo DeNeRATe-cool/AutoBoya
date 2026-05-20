@@ -2,7 +2,9 @@ from datetime import datetime
 from pathlib import Path
 
 from autoboya.cache import CourseCache, preview_auto_select_courses
+from autoboya.cli import app
 from autoboya.storage import AutoBoyaStore
+from typer.testing import CliRunner
 
 
 def test_course_cache_round_trip(tmp_path: Path):
@@ -47,3 +49,62 @@ def test_auto_preview_keeps_only_autonomous_sign_courses(tmp_path: Path):
 
     assert [course.id for course in preview.candidates] == [1001]
     assert preview.excluded[1002] == "常规签到或无位置配置"
+
+
+def test_selected_user_defaults_to_readable_table(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
+    store = AutoBoyaStore()
+    store.init()
+    CourseCache(store).save_selected(
+        "test-user",
+        [
+            {
+                "id": 1001,
+                "courseName": "表格课程",
+                "coursePosition": "沙河",
+                "courseNewKind2": {"kindName": "美育"},
+                "courseStartDate": "2026-05-20 08:00:00",
+                "courseEndDate": "2026-05-20 09:00:00",
+                "courseSignConfig": "",
+            }
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["selected", "--user", "test-user"])
+
+    assert result.exit_code == 0
+    assert "状态" in result.output
+    assert "课程ID" in result.output
+    assert "表格课程" in result.output
+    assert not result.output.lstrip().startswith("{")
+
+
+def test_stats_user_defaults_to_readable_table(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
+    store = AutoBoyaStore()
+    store.init()
+    CourseCache(store).save_statistics(
+        "test-user",
+        {
+            "statistical": {
+                "60|博雅课程": {
+                    "55|德育": {
+                        "assessmentCount": 2,
+                        "selectAssessmentCount": 1,
+                        "completeAssessmentCount": 1,
+                        "failAssessmentCount": 0,
+                        "undoneAssessmentCount": 1,
+                    }
+                }
+            },
+            "validCount": 1,
+        },
+    )
+
+    result = CliRunner().invoke(app, ["stats", "--user", "test-user"])
+
+    assert result.exit_code == 0
+    assert "类型" in result.output
+    assert "德育" in result.output
+    assert "要求" in result.output
+    assert not result.output.lstrip().startswith("{")
