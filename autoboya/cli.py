@@ -118,27 +118,44 @@ def login(username: str) -> None:
 def courses_refresh(username: Optional[str] = typer.Option(None, "--user")) -> None:
     store = AutoBoyaStore()
     store.init()
-    user = username or first_username(store)
+    users = [username] if username else enabled_usernames(store)
+    if not users:
+        raise typer.BadParameter("No enabled users configured")
+    pool_user = users[0]
     cache = CourseCache(store)
     try:
-        def refresh(client: BykcClient) -> int:
+        def refresh_pool(client: BykcClient) -> tuple[int, str, str]:
             courses = client.query_courses()
             cache.save_courses(courses)
             start, end = current_semester_window(client.get_all_config())
-            selected = client.query_chosen_courses(start, end)
-            cache.save_selected(user, selected)
-            cache.save_statistics(user, client.query_statistics())
-            return len(courses)
+            return len(courses), start, end
 
-        count = call_with_reauth(store, user, refresh, captcha_provider=prompt_captcha)
+        count, start, end = call_with_reauth(store, pool_user, refresh_pool, captcha_provider=prompt_captcha)
+        for user in users:
+            refresh_user_caches(store, user, start, end)
     except Exception as exc:
         fail_command(exc)
-    typer.echo(f"Refreshed {count} courses using {mask(user)}")
+    typer.echo(f"Refreshed {count} courses using {mask(pool_user)}; updated {len(users)} user(s)")
 
 
 def prompt_captcha(challenge) -> str:
     typer.echo(f"CAPTCHA image: {challenge.image_path}")
     return typer.prompt("CAPTCHA")
+
+
+def enabled_usernames(store: AutoBoyaStore) -> list[str]:
+    return [user.username for user in store.user_records() if user.enabled]
+
+
+def refresh_user_caches(store: AutoBoyaStore, user: str, start: str, end: str) -> None:
+    cache = CourseCache(store)
+
+    def refresh_user(client: BykcClient) -> None:
+        selected = client.query_chosen_courses(start, end)
+        cache.save_selected(user, selected)
+        cache.save_statistics(user, client.query_statistics())
+
+    call_with_reauth(store, user, refresh_user, captcha_provider=prompt_captcha)
 
 
 @courses_app.command("list")
@@ -424,6 +441,7 @@ def print_stats_table(data: dict[str, object], username: str | None = None) -> N
             if not isinstance(stats, dict):
                 continue
             valid_count = stats.get("validCount", "-")
+            show_valid_count = True
             for category, item in iter_stat_rows(stats):
                 row = [
                     category,
@@ -432,8 +450,9 @@ def print_stats_table(data: dict[str, object], username: str | None = None) -> N
                     str(item.get("completeAssessmentCount", "-")),
                     str(item.get("failAssessmentCount", "-")),
                     str(item.get("undoneAssessmentCount", "-")),
-                    str(valid_count),
+                    str(valid_count) if show_valid_count else "",
                 ]
+                show_valid_count = False
                 if include_user:
                     row.insert(0, mask(str(user)))
                 table.add_row(*row)

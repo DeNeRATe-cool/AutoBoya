@@ -53,6 +53,8 @@ autoboya courses auto-preview
 autoboya courses auto-preview --json
 ```
 
+`autoboya courses refresh` fetches the full paginated course list once and refreshes selected-course/statistics caches for every enabled user. Use `--user` to refresh selected-course/statistics caches for only one user.
+
 Selected courses and statistics:
 
 ```bash

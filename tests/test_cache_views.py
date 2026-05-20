@@ -108,3 +108,26 @@ def test_stats_user_defaults_to_readable_table(monkeypatch, tmp_path: Path):
     assert "德育" in result.output
     assert "要求" in result.output
     assert not result.output.lstrip().startswith("{")
+
+
+def test_stats_shows_valid_count_once_per_user(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
+    store = AutoBoyaStore()
+    store.init()
+    CourseCache(store).save_statistics(
+        "test-user",
+        {
+            "statistical": {
+                "60|博雅课程": {
+                    "55|德育": {"assessmentCount": 2, "selectAssessmentCount": 1},
+                    "56|美育": {"assessmentCount": 1, "selectAssessmentCount": 0},
+                }
+            },
+            "validCount": 3,
+        },
+    )
+
+    result = CliRunner().invoke(app, ["stats", "--user", "test-user"])
+
+    assert result.exit_code == 0
+    assert result.output.count("│      3 │") == 1

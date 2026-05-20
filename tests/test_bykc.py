@@ -106,3 +106,53 @@ def test_query_courses_reads_all_pages():
 
     assert [course.id for course in courses] == [1001, 1002]
     assert seen_payloads == [{"pageNumber": 1, "pageSize": 100}, {"pageNumber": 2, "pageSize": 100}]
+
+
+def test_query_courses_uses_total_elements_when_total_pages_missing():
+    payloads = [
+        {
+            "status": "0",
+            "data": {
+                "content": [{"id": 1001, "courseName": "第一页"}],
+                "totalElements": 2,
+                "size": 1,
+                "numberOfElements": 1,
+            },
+        },
+        {
+            "status": "0",
+            "data": {
+                "content": [{"id": 1002, "courseName": "第二页"}],
+                "totalElements": 2,
+                "size": 1,
+                "numberOfElements": 1,
+            },
+        },
+    ]
+    seen_payloads = []
+
+    class StaticCrypto:
+        def encrypt_request(self, payload):
+            from autoboya.crypto import EncryptedRequest
+
+            seen_payloads.append(payload)
+            return EncryptedRequest(body=b'"request"', headers={"Ak": "a", "Sk": "s", "Ts": "1"})
+
+        def decrypt_response(self, body):
+            return payloads.pop(0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='"response"')
+
+    client = BykcClient("token", http_client=httpx.Client(transport=httpx.MockTransport(handler)), use_vpn=False)
+    import autoboya.bykc as bykc_module
+
+    original = bykc_module.BykcCrypto
+    bykc_module.BykcCrypto = StaticCrypto
+    try:
+        courses = client.query_courses(page_size=1)
+    finally:
+        bykc_module.BykcCrypto = original
+
+    assert [course.id for course in courses] == [1001, 1002]
+    assert seen_payloads == [{"pageNumber": 1, "pageSize": 1}, {"pageNumber": 2, "pageSize": 1}]

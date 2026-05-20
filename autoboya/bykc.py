@@ -80,11 +80,16 @@ class BykcClient:
             content = page_data.get("content") or []
             courses.extend(parse_course(item) for item in content)
             total_pages = parse_int(page_data.get("totalPages"))
+            total_elements = parse_int(page_data.get("totalElements"))
             if page_data.get("last") is True:
+                break
+            if total_elements is not None and len(courses) >= total_elements:
                 break
             if total_pages is not None and current_page >= total_pages:
                 break
             if not content:
+                break
+            if total_pages is None and total_elements is None and len(content) < page_size:
                 break
             current_page += 1
         return courses
