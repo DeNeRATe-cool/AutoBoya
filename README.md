@@ -77,6 +77,8 @@ autoboya stop
 Manual operations:
 
 ```bash
+autoboya select <course_id> --user <username> --yes
+autoboya select <course_id> --all-users --yes
 autoboya drop <course_id> --user <username> --yes
 autoboya drop <course_id> --all-users --yes
 autoboya sign <course_id> --user <username>
@@ -84,6 +86,8 @@ autoboya sign <course_id> --all-users
 autoboya signout <course_id> --user <username>
 autoboya signout <course_id> --all-users
 ```
+
+`sign` and `signout` require the course to already be selected. Use `select` first, then sign during the configured sign window. `drop` accepts a course ID and uses the cached selected-record ID when available.
 
 Diagnostics:
 
@@ -96,7 +100,7 @@ Every command and command group accepts both `-h` and `--help`.
 
 ## Automation Policy
 
-AutoBoya does not select every selectable course. The daemon only auto-selects cached courses that are currently selectable and whose sign method is `自主签到`, derived from a non-empty `courseSignConfig.signPointList`. Courses with `常规签到` or no location sign config are skipped. Use `autoboya courses auto-preview` to inspect the courses that would be selected before running the daemon.
+AutoBoya does not select every selectable course. The daemon only auto-selects cached courses that are currently selectable, whose sign method is `自主签到`, derived from a non-empty `courseSignConfig.signPointList`, and whose category is not `其他方面`. Courses with `常规签到`, no location sign config, or category `其他方面` are skipped. Use `autoboya courses auto-preview` to inspect the courses that would be selected before running the daemon.
 
 CAPTCHA handling follows UBAA: the CLI fetches the SSO CAPTCHA image and asks the operator to type the code. It does not OCR or bypass CAPTCHA.
 

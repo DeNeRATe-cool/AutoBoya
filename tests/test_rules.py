@@ -65,6 +65,21 @@ def test_auto_select_candidate_requires_autonomous_sign_config():
     assert not is_auto_select_candidate(regular, now)
 
 
+def test_auto_select_candidate_excludes_other_category():
+    course = BoyaCourse(
+        id=1003,
+        category="其他方面",
+        selected=False,
+        select_start="2026-05-20 08:00:00",
+        select_end="2026-05-20 09:00:00",
+        current_count=1,
+        max_count=20,
+        sign_config={"signPointList": [{"lat": 39.981, "lng": 116.344, "radius": 8}]},
+    )
+
+    assert not is_auto_select_candidate(course, datetime(2026, 5, 20, 8, 30))
+
+
 def test_random_point_stays_inside_radius():
     lat, lng = random_point_in_radius(39.981, 116.344, 8, seed=7)
     assert 39.9809 < lat < 39.9811

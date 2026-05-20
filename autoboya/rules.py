@@ -42,7 +42,7 @@ def has_autonomous_sign(course: BoyaCourse) -> bool:
 
 
 def is_auto_select_candidate(course: BoyaCourse, now: datetime) -> bool:
-    return is_selectable(course, now) and has_autonomous_sign(course)
+    return is_selectable(course, now) and has_autonomous_sign(course) and course.category != "其他方面"
 
 
 def auto_select_exclusion_reason(course: BoyaCourse, now: datetime) -> str | None:
@@ -50,6 +50,8 @@ def auto_select_exclusion_reason(course: BoyaCourse, now: datetime) -> str | Non
         return "已选"
     if not has_autonomous_sign(course):
         return "常规签到或无位置配置"
+    if course.category == "其他方面":
+        return "其他方面不自动选课"
     if not in_window(course.select_start, course.select_end, now):
         return "不在选课时间"
     if course.current_count is not None and course.max_count is not None:

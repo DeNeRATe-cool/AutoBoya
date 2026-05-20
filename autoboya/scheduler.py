@@ -133,6 +133,7 @@ class AutomationRunner:
     def _select_for_user(self, user: UserRecord, course_id: int) -> ActionResult:
         try:
             self._with_reauth(user.username, lambda client: client.select_course(course_id))
+            self._refresh_user_cache(user.username)
             return ActionResult(user.username, "select", course_id, True, "selected")
         except Exception as exc:
             return ActionResult(user.username, "select", course_id, False, str(exc))
@@ -167,6 +168,14 @@ class AutomationRunner:
         except SessionExpired:
             client = force_login_bykc_client(self.store, username)
             return operation(client)
+
+    def _refresh_user_cache(self, username: str) -> None:
+        def refresh(client):
+            start, end = current_semester_window(client.get_all_config())
+            self.cache.save_selected(username, client.query_chosen_courses(start, end))
+            self.cache.save_statistics(username, client.query_statistics())
+
+        self._with_reauth(username, refresh)
 
 
 def journal_key(username: str, action: str, course_id: int, when: datetime | None = None) -> str:

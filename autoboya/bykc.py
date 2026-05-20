@@ -101,7 +101,7 @@ class BykcClient:
     def query_chosen_courses(self, start_date: str, end_date: str) -> list[BoyaCourse]:
         data = self.call("queryChosenCourse", {"startDate": start_date, "endDate": end_date})
         items = (((data.get("data") or {}).get("courseList") or []) if isinstance(data, dict) else [])
-        return [parse_course(item.get("courseInfo") or item) for item in items]
+        return [parse_chosen_course(item) for item in items]
 
     def query_statistics(self) -> dict[str, Any]:
         data = self.call("queryStatisticByUserId", {})
@@ -140,6 +140,19 @@ def parse_course(raw: dict[str, Any]) -> BoyaCourse:
         sign_type=parse_int(raw.get("courseSignType")),
         raw=raw,
     )
+
+
+def parse_chosen_course(raw: dict[str, Any]) -> BoyaCourse:
+    course_info = raw.get("courseInfo") if isinstance(raw, dict) else None
+    if isinstance(course_info, dict):
+        merged = dict(course_info)
+        merged["selected"] = True
+        merged["chosenCourseId"] = raw.get("id")
+        for key in ["selectDate", "checkin", "score", "pass", "signInfo"]:
+            if key in raw:
+                merged[key] = raw[key]
+        return parse_course(merged)
+    return parse_course(raw)
 
 
 def parse_category(raw: dict[str, Any]) -> str:

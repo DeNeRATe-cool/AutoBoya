@@ -26,32 +26,37 @@ from .storage import AutoBoyaStore, try_get_keyring_password, try_store_keyring_
 
 HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
 
-app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
-user_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
-courses_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
-logs_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
-app.add_typer(user_app, name="user")
-app.add_typer(courses_app, name="courses")
-app.add_typer(logs_app, name="logs")
+app = typer.Typer(
+    no_args_is_help=True,
+    pretty_exceptions_show_locals=False,
+    context_settings=HELP_CONTEXT,
+    help="北航博雅课程查看、选课、签到和后台自动化工具。",
+)
+user_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT, help="管理本地账号。")
+courses_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT, help="查看课程、刷新缓存和预览自动选课。")
+logs_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT, help="查看后台运行日志。")
+app.add_typer(user_app, name="user", help="管理账号。")
+app.add_typer(courses_app, name="courses", help="查看课程。")
+app.add_typer(logs_app, name="logs", help="查看日志。")
 
 
-@app.command()
+@app.command(help="显示 autoboya 版本。")
 def version() -> None:
     typer.echo(f"autoboya {__version__}")
 
 
-@app.command()
+@app.command(help="初始化 ~/.autoboya 数据目录。")
 def init() -> None:
     store = AutoBoyaStore()
     store.init()
     typer.echo(f"Initialized {store.root}")
 
 
-@user_app.command("add")
+@user_app.command("add", help="添加账号并保存密码。默认优先保存到系统钥匙串。")
 def user_add(
-    username: str,
-    password_stdin: bool = typer.Option(False, "--password-stdin"),
-    unsafe_store_password: bool = typer.Option(False, "--unsafe-store-password"),
+    username: str = typer.Argument(..., help="学号或统一认证账号。"),
+    password_stdin: bool = typer.Option(False, "--password-stdin", help="从标准输入读取密码，适合脚本使用。"),
+    unsafe_store_password: bool = typer.Option(False, "--unsafe-store-password", help="钥匙串不可用时明文保存到 ~/.autoboya/secrets.json。"),
 ) -> None:
     store = AutoBoyaStore()
     store.init()
@@ -68,7 +73,7 @@ def user_add(
     typer.echo(f"Added user {mask(username)}")
 
 
-@user_app.command("list")
+@user_app.command("list", help="列出已添加账号。")
 def user_list() -> None:
     store = AutoBoyaStore()
     store.init()
@@ -81,16 +86,16 @@ def user_list() -> None:
         typer.echo(f"{mask(user.username)} {status} password={user.password_ref or 'missing'}")
 
 
-@user_app.command("remove")
-def user_remove(username: str) -> None:
+@user_app.command("remove", help="移除本地账号记录。")
+def user_remove(username: str = typer.Argument(..., help="要移除的账号。")) -> None:
     store = AutoBoyaStore()
     store.init()
     removed = store.remove_user(username)
     typer.echo("Removed" if removed else "User not found")
 
 
-@app.command()
-def login(username: str) -> None:
+@app.command(help="交互式登录账号；如果需要验证码会显示图片路径并提示输入。")
+def login(username: str = typer.Argument(..., help="要登录的账号。")) -> None:
     store = AutoBoyaStore()
     store.init()
     password = password_for(store, username)
@@ -114,8 +119,8 @@ def login(username: str) -> None:
     typer.echo(f"Logged in {mask(username)}")
 
 
-@courses_app.command("refresh")
-def courses_refresh(username: Optional[str] = typer.Option(None, "--user")) -> None:
+@courses_app.command("refresh", help="刷新课程缓存；默认刷新全量课程和所有启用账号的已选/统计缓存。")
+def courses_refresh(username: Optional[str] = typer.Option(None, "--user", help="只刷新指定账号的已选课程和统计。")) -> None:
     store = AutoBoyaStore()
     store.init()
     users = [username] if username else enabled_usernames(store)
@@ -158,8 +163,23 @@ def refresh_user_caches(store: AutoBoyaStore, user: str, start: str, end: str) -
     call_with_reauth(store, user, refresh_user, captcha_provider=prompt_captcha)
 
 
-@courses_app.command("list")
-def courses_list(only_selectable: bool = False, as_json: bool = typer.Option(False, "--json")) -> None:
+def select_and_refresh_user(store: AutoBoyaStore, user: str, course_id: int) -> None:
+    cache = CourseCache(store)
+
+    def select_and_refresh(client: BykcClient) -> None:
+        client.select_course(course_id)
+        start, end = current_semester_window(client.get_all_config())
+        cache.save_selected(user, client.query_chosen_courses(start, end))
+        cache.save_statistics(user, client.query_statistics())
+
+    call_with_reauth(store, user, select_and_refresh, captcha_provider=prompt_captcha)
+
+
+@courses_app.command("list", help="查看本地缓存课程列表。")
+def courses_list(
+    only_selectable: bool = typer.Option(False, "--only-selectable", help="只显示当前处于选课窗口、未满员、未选中的课程。"),
+    as_json: bool = typer.Option(False, "--json", help="以 JSON 输出。"),
+) -> None:
     from .rules import is_selectable
 
     cache = CourseCache(AutoBoyaStore())
@@ -174,8 +194,11 @@ def courses_list(only_selectable: bool = False, as_json: bool = typer.Option(Fal
         typer.echo(format_course_line(course))
 
 
-@courses_app.command("show")
-def courses_show(course_id: int, as_json: bool = typer.Option(False, "--json")) -> None:
+@courses_app.command("show", help="查看某一门课程详情。")
+def courses_show(
+    course_id: int = typer.Argument(..., help="课程 ID。"),
+    as_json: bool = typer.Option(False, "--json", help="以 JSON 输出。"),
+) -> None:
     cache = CourseCache(AutoBoyaStore())
     course = next((item for item in cache.parsed_courses() if item.id == course_id), None)
     if not course:
@@ -183,8 +206,8 @@ def courses_show(course_id: int, as_json: bool = typer.Option(False, "--json")) 
     typer.echo(json.dumps(course_to_view(course), ensure_ascii=False, indent=2) if as_json else format_course_line(course))
 
 
-@courses_app.command("auto-preview")
-def courses_auto_preview(as_json: bool = typer.Option(False, "--json")) -> None:
+@courses_app.command("auto-preview", help="预览后台会自动选择的课程。只包含自主签到课程，并排除其他方面。")
+def courses_auto_preview(as_json: bool = typer.Option(False, "--json", help="以 JSON 输出候选和排除原因。")) -> None:
     cache = CourseCache(AutoBoyaStore())
     preview = preview_auto_select_courses(cache.load_courses(), now=datetime.now())
     if as_json:
@@ -207,8 +230,11 @@ def courses_auto_preview(as_json: bool = typer.Option(False, "--json")) -> None:
         typer.echo(format_course_line(course))
 
 
-@app.command()
-def selected(username: Optional[str] = typer.Option(None, "--user"), as_json: bool = typer.Option(False, "--json")) -> None:
+@app.command(help="查看已选课程；默认表格展示，可按账号筛选。")
+def selected(
+    username: Optional[str] = typer.Option(None, "--user", help="只查看指定账号。"),
+    as_json: bool = typer.Option(False, "--json", help="以 JSON 输出。"),
+) -> None:
     store = AutoBoyaStore()
     cache = CourseCache(store)
     raw = cache.load_selected(username)
@@ -232,8 +258,11 @@ def selected(username: Optional[str] = typer.Option(None, "--user"), as_json: bo
     typer.echo(json.dumps(output, ensure_ascii=False, indent=2) if as_json else json.dumps(output, ensure_ascii=False))
 
 
-@app.command()
-def stats(username: Optional[str] = typer.Option(None, "--user"), as_json: bool = typer.Option(False, "--json")) -> None:
+@app.command(help="查看博雅课程类型统计。")
+def stats(
+    username: Optional[str] = typer.Option(None, "--user", help="只查看指定账号。"),
+    as_json: bool = typer.Option(False, "--json", help="以 JSON 输出。"),
+) -> None:
     data = CourseCache(AutoBoyaStore()).load_statistics(username)
     if not as_json:
         print_stats_table(data, username=username)
@@ -241,26 +270,56 @@ def stats(username: Optional[str] = typer.Option(None, "--user"), as_json: bool 
     typer.echo(json.dumps(data, ensure_ascii=False, indent=2 if as_json else None))
 
 
-@app.command()
+@app.command(help="启动后台自动化循环：每小时刷新、每分钟扫描可选/可签到/可签退动作。")
 def run() -> None:
     configure_logging()
     AutomationRunner(AutoBoyaStore()).run_forever()
 
 
-@app.command()
+@app.command(help="请求停止后台自动化循环。")
 def stop() -> None:
     AutomationRunner(AutoBoyaStore()).request_stop()
     typer.echo("Stop requested")
 
 
-@app.command("run-once")
+@app.command("run-once", help="立即执行一次刷新、自动选课、签到和签退扫描。会产生真实操作。")
 def run_once() -> None:
     results = AutomationRunner(AutoBoyaStore()).run_once()
     typer.echo(json.dumps([result.__dict__ for result in results], ensure_ascii=False, indent=2))
 
 
-@app.command()
-def drop(course_id: int, username: Optional[str] = typer.Option(None, "--user"), all_users: bool = False, yes: bool = False) -> None:
+@app.command("select", help="手动选课。会产生真实选课操作，需要 --yes 确认。")
+def select_course_command(
+    course_id: int = typer.Argument(..., help="要选择的课程 ID。"),
+    username: Optional[str] = typer.Option(None, "--user", help="只为指定账号选课。"),
+    all_users: bool = typer.Option(False, "--all-users", help="为所有本地账号选课。"),
+    yes: bool = typer.Option(False, "--yes", help="确认执行真实选课操作。"),
+) -> None:
+    if not username and not all_users:
+        raise typer.BadParameter("Use --user or --all-users")
+    if not yes:
+        raise typer.BadParameter("Real select requires --yes")
+    store = AutoBoyaStore()
+    users = [username] if username else [user.username for user in store.user_records()]
+    failed = False
+    for user in users:
+        try:
+            select_and_refresh_user(store, user, course_id)
+            typer.echo(f"Selected {course_id} for {mask(user)}")
+        except Exception as exc:
+            typer.echo(f"Failed to select {course_id} for {mask(user)}: {exc}", err=True)
+            failed = True
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command(help="手动退课。优先使用已选记录 ID 退课；会产生真实操作，需要 --yes 确认。")
+def drop(
+    course_id: int = typer.Argument(..., help="要退选的课程 ID。"),
+    username: Optional[str] = typer.Option(None, "--user", help="只为指定账号退课。"),
+    all_users: bool = typer.Option(False, "--all-users", help="为所有本地账号退课。"),
+    yes: bool = typer.Option(False, "--yes", help="确认执行真实退课操作。"),
+) -> None:
     if not username and not all_users:
         raise typer.BadParameter("Use --user or --all-users")
     if not yes:
@@ -270,7 +329,11 @@ def drop(course_id: int, username: Optional[str] = typer.Option(None, "--user"),
     failed = False
     for user in users:
         try:
-            call_with_reauth(store, user, lambda client: client.drop_course(course_id), captcha_provider=prompt_captcha)
+            selected_course = selected_course_for_user(store, user, course_id)
+            if not selected_course:
+                raise RuntimeError(f"course {course_id} is not selected for {mask(user)}; run autoboya selected --user {user}")
+            drop_id = selected_record_id(selected_course) or course_id
+            call_with_reauth(store, user, lambda client: client.drop_course(drop_id), captcha_provider=prompt_captcha)
             typer.echo(f"Dropped {course_id} for {mask(user)}")
         except Exception as exc:
             typer.echo(f"Failed to drop {course_id} for {mask(user)}: {exc}", err=True)
@@ -279,18 +342,26 @@ def drop(course_id: int, username: Optional[str] = typer.Option(None, "--user"),
         raise typer.Exit(1)
 
 
-@app.command()
-def sign(course_id: int, username: Optional[str] = typer.Option(None, "--user"), all_users: bool = False) -> None:
+@app.command(help="手动签到。会从签到点范围内随机生成坐标并提交真实签到。")
+def sign(
+    course_id: int = typer.Argument(..., help="要签到的课程 ID。"),
+    username: Optional[str] = typer.Option(None, "--user", help="只为指定账号签到。"),
+    all_users: bool = typer.Option(False, "--all-users", help="为所有本地账号签到。"),
+) -> None:
     manual_sign(course_id, 1, username, all_users)
 
 
-@app.command()
-def signout(course_id: int, username: Optional[str] = typer.Option(None, "--user"), all_users: bool = False) -> None:
+@app.command(help="手动签退。会从签到点范围内随机生成坐标并提交真实签退。")
+def signout(
+    course_id: int = typer.Argument(..., help="要签退的课程 ID。"),
+    username: Optional[str] = typer.Option(None, "--user", help="只为指定账号签退。"),
+    all_users: bool = typer.Option(False, "--all-users", help="为所有本地账号签退。"),
+) -> None:
     manual_sign(course_id, 2, username, all_users)
 
 
-@logs_app.command("tail")
-def logs_tail(lines: int = 80) -> None:
+@logs_app.command("tail", help="查看日志文件末尾内容。")
+def logs_tail(lines: int = typer.Option(80, "--lines", help="显示最后多少行日志。")) -> None:
     path = AutoBoyaStore().path(LOG_FILE)
     if not path.exists():
         typer.echo("No log file")
@@ -298,7 +369,7 @@ def logs_tail(lines: int = 80) -> None:
     typer.echo("\n".join(path.read_text(encoding="utf-8").splitlines()[-lines:]))
 
 
-@app.command()
+@app.command(help="检查 Python 版本、数据目录、用户数量和目录可写性。")
 def doctor() -> None:
     store = AutoBoyaStore()
     store.init()
@@ -314,15 +385,19 @@ def manual_sign(course_id: int, sign_type: int, username: str | None, all_users:
     store = AutoBoyaStore()
     cache = CourseCache(store)
     cached = next((course for course in cache.parsed_courses() if course.id == course_id), None)
-    if not cached or not cached.sign_config.get("signPointList"):
-        fail_command(MissingSignPoint("No sign point available"))
-    point = cached.sign_config["signPointList"][-1]
-    lat, lng = random_point_in_radius(float(point["lat"]), float(point["lng"]), float(point.get("radius") or 8))
     users = [username] if username else [user.username for user in store.user_records()]
     action = "sign" if sign_type == 1 else "signout"
     failed = False
     for user in users:
         try:
+            selected_course = selected_course_for_user(store, user, course_id)
+            if not selected_course:
+                raise RuntimeError(f"course {course_id} is not selected for {mask(user)}; run autoboya select {course_id} --user {user} --yes first")
+            sign_course = selected_course if selected_course.sign_config.get("signPointList") else cached
+            if not sign_course or not sign_course.sign_config.get("signPointList"):
+                raise MissingSignPoint("No sign point available")
+            point = sign_course.sign_config["signPointList"][-1]
+            lat, lng = random_point_in_radius(float(point["lat"]), float(point["lng"]), float(point.get("radius") or 8))
             call_with_reauth(
                 store,
                 user,
@@ -335,6 +410,28 @@ def manual_sign(course_id: int, sign_type: int, username: str | None, all_users:
             failed = True
     if failed:
         raise typer.Exit(1)
+
+
+def selected_course_for_user(store: AutoBoyaStore, username: str, course_id: int):
+    raw = CourseCache(store).load_selected(username)
+    if not isinstance(raw, list):
+        return None
+    for item in raw:
+        course = parse_course(item)
+        if course.id == course_id:
+            return course
+    return None
+
+
+def selected_record_id(course) -> int | None:
+    for key in ["chosenCourseId", "selectedId", "chosenId"]:
+        value = course.raw.get(key) if isinstance(course.raw, dict) else None
+        try:
+            if value is not None:
+                return int(value)
+        except Exception:
+            continue
+    return None
 
 
 def current_semester_window(config: dict[str, object]) -> tuple[str, str]:

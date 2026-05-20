@@ -45,7 +45,12 @@ def test_refresh_with_missing_password_is_user_facing(monkeypatch, tmp_path):
     assert "Traceback" not in result.output
 
 
-def test_drop_api_error_is_user_facing(monkeypatch):
+def test_drop_api_error_is_user_facing(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
+    store = cli.AutoBoyaStore()
+    store.init()
+    store.save_json("cache/selected.json", {"test-user": [{"id": 123, "courseName": "Test"}]})
+
     def failing_call_with_reauth(store, username, operation, captcha_provider=None):
         raise RuntimeError("course is not droppable")
 
@@ -73,6 +78,7 @@ def test_sign_api_error_is_user_facing(monkeypatch, tmp_path):
             }
         ],
     )
+    store.save_json("cache/selected.json", {"test-user": [{"id": 123, "courseName": "Test", "courseSignConfig": {"signPointList": [{"lat": 40.0, "lng": 116.0, "radius": 10}]}}]})
 
     def failing_call_with_reauth(store, username, operation, captcha_provider=None):
         raise SignWindowClosed("not in sign window")

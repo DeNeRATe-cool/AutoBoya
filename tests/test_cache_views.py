@@ -42,6 +42,17 @@ def test_auto_preview_keeps_only_autonomous_sign_courses(tmp_path: Path):
                 "courseMaxCount": 20,
                 "courseSignConfig": "",
             },
+            {
+                "id": 1003,
+                "courseName": "其他方面课程",
+                "courseNewKind2": {"kindName": "其他方面"},
+                "selected": False,
+                "courseSelectStartDate": "2026-05-20 08:00:00",
+                "courseSelectEndDate": "2026-05-20 09:00:00",
+                "courseCurrentCount": 1,
+                "courseMaxCount": 20,
+                "courseSignConfig": '{"signPointList":[{"lat":39.981,"lng":116.344,"radius":8}]}',
+            },
         ]
     )
 
@@ -49,6 +60,7 @@ def test_auto_preview_keeps_only_autonomous_sign_courses(tmp_path: Path):
 
     assert [course.id for course in preview.candidates] == [1001]
     assert preview.excluded[1002] == "常规签到或无位置配置"
+    assert preview.excluded[1003] == "其他方面不自动选课"
 
 
 def test_selected_user_defaults_to_readable_table(monkeypatch, tmp_path: Path):
