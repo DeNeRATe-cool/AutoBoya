@@ -31,6 +31,7 @@ class CaptchaChallenge:
 class AuthSession:
     username: str
     bykc_token: str
+    cookies: list[dict[str, object]]
 
 
 class _FormParser(html.parser.HTMLParser):
@@ -100,6 +101,7 @@ class AuthClient:
         if html is None:
             try:
                 self.preflight_login()
+                html = self._last_login_html
             except CaptchaRequired as exc:
                 if not captcha:
                     raise
@@ -120,7 +122,7 @@ class AuthClient:
         token = self.acquire_bykc_token()
         if not token:
             raise LoginError("Boya token was not returned after SSO login")
-        return AuthSession(username=username, bykc_token=token)
+        return AuthSession(username=username, bykc_token=token, cookies=serialize_cookies(self.client))
 
     def follow_redirects_and_password_expiry(self, response: httpx.Response) -> httpx.Response:
         current = response
@@ -231,3 +233,19 @@ def extract_token(url: str) -> str | None:
         return token
     match = re.search(r"[?&]token=([^&\s]+)", url)
     return match.group(1) if match else None
+
+
+def serialize_cookies(client: httpx.Client) -> list[dict[str, object]]:
+    cookies: list[dict[str, object]] = []
+    for cookie in client.cookies.jar:
+        cookies.append(
+            {
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain,
+                "path": cookie.path,
+                "secure": bool(cookie.secure),
+                "expires": cookie.expires,
+            }
+        )
+    return cookies

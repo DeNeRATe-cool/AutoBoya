@@ -1,4 +1,7 @@
-from autoboya.bykc import parse_course
+import httpx
+import pytest
+
+from autoboya.bykc import BykcClient, parse_course
 from autoboya.exceptions import CourseFull, SelectionLimitReached, SessionExpired, map_boya_error
 
 
@@ -29,3 +32,43 @@ def test_error_mapping():
     assert isinstance(map_boya_error("您的会话已失效,请重新登录后再试,谢谢!"), SessionExpired)
     assert isinstance(map_boya_error("课程容量已满"), CourseFull)
     assert isinstance(map_boya_error("已达到选课上限"), SelectionLimitReached)
+
+
+def test_success_status_allows_success_message():
+    payload = {"status": "0", "errmsg": "请求成功", "data": {"content": []}}
+
+    class StaticCrypto:
+        def encrypt_request(self, payload):
+            from autoboya.crypto import EncryptedRequest
+
+            return EncryptedRequest(body=b'"request"', headers={"Ak": "a", "Sk": "s", "Ts": "1"})
+
+        def decrypt_response(self, body):
+            return payload
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='"response"')
+
+    client = BykcClient("token", http_client=httpx.Client(transport=httpx.MockTransport(handler)), use_vpn=False)
+    import autoboya.bykc as bykc_module
+
+    original = bykc_module.BykcCrypto
+    bykc_module.BykcCrypto = StaticCrypto
+    try:
+        assert client.call("queryStudentSemesterCourseByPage", {}) == payload
+    finally:
+        bykc_module.BykcCrypto = original
+
+
+def test_html_login_page_response_is_session_expired():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><title>CAS Login</title><form id='loginForm'></form></html>")
+
+    client = BykcClient(
+        "token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        use_vpn=False,
+    )
+
+    with pytest.raises(SessionExpired, match="WebVPN session"):
+        client.query_courses()

@@ -69,14 +69,12 @@ class AutomationRunner:
         if not users:
             return
         pool_user = random.choice(users)
-        pool_token = self.token_for(pool_user.username)
-        pool_client = BykcClient(pool_token)
+        pool_client = self.bykc_client_for(pool_user.username)
         config = pool_client.get_all_config()
         self.cache.save_courses(pool_client.query_courses())
         start, end = current_semester_window(config)
         for user in users:
-            token = self.token_for(user.username)
-            client = BykcClient(token)
+            client = self.bykc_client_for(user.username)
             self.cache.save_selected(user.username, client.query_chosen_courses(start, end))
             self.cache.save_statistics(user.username, client.query_statistics())
 
@@ -121,7 +119,7 @@ class AutomationRunner:
 
     def _select_for_user(self, user: UserRecord, course_id: int) -> ActionResult:
         try:
-            BykcClient(self.token_for(user.username)).select_course(course_id)
+            self.bykc_client_for(user.username).select_course(course_id)
             return ActionResult(user.username, "select", course_id, True, "selected")
         except Exception as exc:
             return ActionResult(user.username, "select", course_id, False, str(exc))
@@ -133,7 +131,7 @@ class AutomationRunner:
         lat, lng = random_point_in_radius(float(point["lat"]), float(point["lng"]), float(point.get("radius") or 8))
         sign_type = 1 if action == "sign" else 2
         try:
-            BykcClient(self.token_for(username)).sign_course(course.id, lat, lng, sign_type)
+            self.bykc_client_for(username).sign_course(course.id, lat, lng, sign_type)
             return ActionResult(username, action, course.id, True, "signed")
         except Exception as exc:
             return ActionResult(username, action, course.id, False, str(exc))
@@ -155,6 +153,16 @@ class AutomationRunner:
         if not token:
             raise RuntimeError(f"No Boya token for {username}")
         return token
+
+    def bykc_client_for(self, username: str) -> BykcClient:
+        session = self.store.load_json(f"sessions/{username}.json", {})
+        token = session.get("bykc_token") if isinstance(session, dict) else None
+        cookies = session.get("cookies") if isinstance(session, dict) else None
+        if not token:
+            raise RuntimeError(f"No Boya token for {username}")
+        if not isinstance(cookies, list):
+            raise RuntimeError(f"Stored session for {username} has no WebVPN cookies; run autoboya login again")
+        return BykcClient(str(token), cookies=cookies)
 
 
 def journal_key(username: str, action: str, course_id: int, when: datetime | None = None) -> str:

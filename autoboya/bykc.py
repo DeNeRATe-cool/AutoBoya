@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any
 
 import httpx
 
 from .crypto import BykcCrypto
-from .exceptions import AutoBoyaError, BoyaApiError, map_boya_error
+from .exceptions import BoyaApiError, SessionExpired, map_boya_error
 from .models import BoyaCourse
 from .webvpn import to_webvpn_url
 
@@ -17,10 +16,18 @@ BYKC_ORIGIN = "https://bykc.buaa.edu.cn"
 
 
 class BykcClient:
-    def __init__(self, token: str, http_client: httpx.Client | None = None, use_vpn: bool = True) -> None:
+    def __init__(
+        self,
+        token: str,
+        http_client: httpx.Client | None = None,
+        use_vpn: bool = True,
+        cookies: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.token = token
         self.client = http_client or httpx.Client(timeout=25, follow_redirects=True)
         self.use_vpn = use_vpn
+        if cookies:
+            restore_cookies(self.client, cookies)
 
     def endpoint(self, api: str) -> str:
         url = f"{BYKC_BASE}/{api}"
@@ -44,13 +51,17 @@ class BykcClient:
         }
         response = self.client.post(self.endpoint(api), content=request.body, headers=headers)
         response.raise_for_status()
-        decoded = crypto.decrypt_response(response.content)
+        try:
+            decoded = crypto.decrypt_response(response.content)
+        except Exception as exc:
+            text = response.text[:240].replace("\n", " ")
+            if looks_like_login_page(response.text):
+                raise SessionExpired("WebVPN session missing or expired; run `autoboya login <user>` again") from exc
+            raise BoyaApiError("decode_error", f"Unable to decrypt BYKC response: {text}") from exc
         status = decoded.get("status") if isinstance(decoded, dict) else None
         errmsg = decoded.get("errmsg") or decoded.get("msg") if isinstance(decoded, dict) else ""
-        if status not in ("0", 0, "200", 200, None) or errmsg:
+        if status not in ("0", 0, "200", 200, None):
             error = map_boya_error(str(errmsg), status)
-            if isinstance(error, BoyaApiError) and status in ("0", 0, None) and not errmsg:
-                return decoded
             raise error
         return decoded
 
@@ -137,3 +148,22 @@ def parse_int(value: Any) -> int | None:
         return int(value)
     except Exception:
         return None
+
+
+def restore_cookies(client: httpx.Client, cookies: list[dict[str, Any]]) -> None:
+    for cookie in cookies:
+        name = cookie.get("name")
+        value = cookie.get("value")
+        if not isinstance(name, str) or not isinstance(value, str):
+            continue
+        client.cookies.set(
+            name,
+            value,
+            domain=cookie.get("domain") if isinstance(cookie.get("domain"), str) else None,
+            path=cookie.get("path") if isinstance(cookie.get("path"), str) else "/",
+        )
+
+
+def looks_like_login_page(text: str) -> bool:
+    head = text[:1000].lower()
+    return "<html" in head and ("cas login" in head or "loginform" in head or "sso.buaa.edu.cn" in head)

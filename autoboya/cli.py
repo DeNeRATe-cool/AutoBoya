@@ -21,10 +21,12 @@ from .rules import classify_selected_courses, random_point_in_radius
 from .scheduler import AutomationRunner
 from .storage import AutoBoyaStore, try_get_keyring_password, try_store_keyring_password
 
-app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
-user_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
-courses_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
-logs_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
+
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
+user_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
+courses_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
+logs_app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False, context_settings=HELP_CONTEXT)
 app.add_typer(user_app, name="user")
 app.add_typer(courses_app, name="courses")
 app.add_typer(logs_app, name="logs")
@@ -101,7 +103,11 @@ def login(username: str) -> None:
     except LoginError as exc:
         typer.echo(f"Login failed: {exc}", err=True)
         raise typer.Exit(1) from None
-    store.save_json(f"sessions/{username}.json", {"bykc_token": session.bykc_token}, mode=0o600)
+    store.save_json(
+        f"sessions/{username}.json",
+        {"bykc_token": session.bykc_token, "cookies": session.cookies},
+        mode=0o600,
+    )
     typer.echo(f"Logged in {mask(username)}")
 
 
@@ -110,15 +116,17 @@ def courses_refresh(username: Optional[str] = typer.Option(None, "--user")) -> N
     store = AutoBoyaStore()
     store.init()
     user = username or first_username(store)
-    token = token_for(store, user)
-    client = BykcClient(token)
+    client = bykc_client_for(store, user)
     cache = CourseCache(store)
-    courses = client.query_courses()
-    cache.save_courses(courses)
-    start, end = current_semester_window(client.get_all_config())
-    selected = client.query_chosen_courses(start, end)
-    cache.save_selected(user, selected)
-    cache.save_statistics(user, client.query_statistics())
+    try:
+        courses = client.query_courses()
+        cache.save_courses(courses)
+        start, end = current_semester_window(client.get_all_config())
+        selected = client.query_chosen_courses(start, end)
+        cache.save_selected(user, selected)
+        cache.save_statistics(user, client.query_statistics())
+    except Exception as exc:
+        fail_command(exc)
     typer.echo(f"Refreshed {len(courses)} courses using {mask(user)}")
 
 
@@ -215,11 +223,18 @@ def drop(course_id: int, username: Optional[str] = typer.Option(None, "--user"),
         raise typer.BadParameter("Use --user or --all-users")
     if not yes:
         raise typer.BadParameter("Real drop requires --yes")
-    users = [username] if username else [user.username for user in AutoBoyaStore().user_records()]
+    store = AutoBoyaStore()
+    users = [username] if username else [user.username for user in store.user_records()]
+    failed = False
     for user in users:
-        token = token_for(AutoBoyaStore(), user)
-        BykcClient(token).drop_course(course_id)
-        typer.echo(f"Dropped {course_id} for {mask(user)}")
+        try:
+            bykc_client_for(store, user).drop_course(course_id)
+            typer.echo(f"Dropped {course_id} for {mask(user)}")
+        except Exception as exc:
+            typer.echo(f"Failed to drop {course_id} for {mask(user)}: {exc}", err=True)
+            failed = True
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -258,14 +273,21 @@ def manual_sign(course_id: int, sign_type: int, username: str | None, all_users:
     cache = CourseCache(store)
     cached = next((course for course in cache.parsed_courses() if course.id == course_id), None)
     if not cached or not cached.sign_config.get("signPointList"):
-        raise MissingSignPoint("No sign point available")
+        fail_command(MissingSignPoint("No sign point available"))
     point = cached.sign_config["signPointList"][-1]
     lat, lng = random_point_in_radius(float(point["lat"]), float(point["lng"]), float(point.get("radius") or 8))
     users = [username] if username else [user.username for user in store.user_records()]
+    action = "sign" if sign_type == 1 else "signout"
+    failed = False
     for user in users:
-        token = token_for(store, user)
-        BykcClient(token).sign_course(course_id, lat, lng, sign_type)
-        typer.echo(f"Signed {course_id} type={sign_type} for {mask(user)}")
+        try:
+            bykc_client_for(store, user).sign_course(course_id, lat, lng, sign_type)
+            typer.echo(f"{action} {course_id} for {mask(user)}")
+        except Exception as exc:
+            typer.echo(f"Failed to {action} {course_id} for {mask(user)}: {exc}", err=True)
+            failed = True
+    if failed:
+        raise typer.Exit(1)
 
 
 def current_semester_window(config: dict[str, object]) -> tuple[str, str]:
@@ -297,6 +319,23 @@ def token_for(store: AutoBoyaStore, username: str) -> str:
     if not token:
         raise typer.BadParameter(f"No Boya token for {mask(username)}; run autoboya login {username}")
     return token
+
+
+def bykc_client_for(store: AutoBoyaStore, username: str) -> BykcClient:
+    session = store.load_json(f"sessions/{username}.json", {})
+    token = session.get("bykc_token") if isinstance(session, dict) else None
+    cookies = session.get("cookies") if isinstance(session, dict) else None
+    if not token:
+        raise typer.BadParameter(f"No Boya token for {mask(username)}; run autoboya login {username}")
+    if not isinstance(cookies, list):
+        raise typer.BadParameter(f"Stored session for {mask(username)} has no WebVPN cookies; run autoboya login {username} again")
+    return BykcClient(str(token), cookies=cookies)
+
+
+def fail_command(exc: Exception) -> None:
+    message = str(exc) or exc.__class__.__name__
+    typer.echo(f"Command failed: {message}", err=True)
+    raise typer.Exit(1) from None
 
 
 def course_to_view(course) -> dict[str, object]:
