@@ -25,7 +25,7 @@ def test_auto_preview_keeps_only_autonomous_sign_courses(tmp_path: Path):
             {
                 "id": 1001,
                 "courseName": "自主签到课程",
-                "selected": False,
+                "selected": True,
                 "courseSelectStartDate": "2026-05-20 08:00:00",
                 "courseSelectEndDate": "2026-05-20 09:00:00",
                 "courseCurrentCount": 1,

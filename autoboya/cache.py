@@ -67,7 +67,7 @@ def preview_auto_select_courses(raw_courses: list[dict[str, Any]], now: datetime
     excluded: dict[int, str] = {}
     for raw in raw_courses:
         course = parse_course(raw)
-        reason = auto_select_exclusion_reason(course, now)
+        reason = auto_select_exclusion_reason(course, now, ignore_selected=True)
         if reason is None:
             candidates.append(course)
         else:

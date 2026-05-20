@@ -29,7 +29,7 @@ def decide_actions(
     decisions.extend(
         AutomationDecision(action="select", course_id=course.id)
         for course in courses
-        if is_auto_select_candidate(course, now)
+        if is_auto_select_candidate(course, now, ignore_selected=True)
     )
     for username, selected_courses in selected_by_user.items():
         for course in selected_courses:
@@ -108,6 +108,8 @@ class AutomationRunner:
         for decision in decisions:
             if decision.action == "select":
                 for user in users:
+                    if user_has_selected(selected_by_user, user.username, decision.course_id):
+                        continue
                     key = journal_key(user.username, "select", decision.course_id)
                     if journal.get(key):
                         continue
@@ -146,6 +148,7 @@ class AutomationRunner:
         sign_type = 1 if action == "sign" else 2
         try:
             self._with_reauth(username, lambda client: client.sign_course(course.id, lat, lng, sign_type))
+            self._refresh_user_cache(username)
             return ActionResult(username, action, course.id, True, "signed")
         except Exception as exc:
             return ActionResult(username, action, course.id, False, str(exc))
@@ -181,6 +184,10 @@ class AutomationRunner:
 def journal_key(username: str, action: str, course_id: int, when: datetime | None = None) -> str:
     when = when or datetime.now()
     return f"{when.date()}:{username}:{action}:{course_id}"
+
+
+def user_has_selected(selected_by_user: dict[str, list[BoyaCourse]], username: str, course_id: int) -> bool:
+    return any(course.id == course_id for course in selected_by_user.get(username, []))
 
 
 def current_semester_window(config: dict[str, object]) -> tuple[str, str]:

@@ -25,8 +25,8 @@ def in_window(start: str | None, end: str | None, now: datetime) -> bool:
     return bool(parsed_start and parsed_end and parsed_start <= now <= parsed_end)
 
 
-def is_selectable(course: BoyaCourse, now: datetime) -> bool:
-    if course.selected:
+def is_selectable(course: BoyaCourse, now: datetime, ignore_selected: bool = False) -> bool:
+    if course.selected and not ignore_selected:
         return False
     if not in_window(course.select_start, course.select_end, now):
         return False
@@ -41,12 +41,12 @@ def has_autonomous_sign(course: BoyaCourse) -> bool:
     return isinstance(points, list) and len(points) > 0
 
 
-def is_auto_select_candidate(course: BoyaCourse, now: datetime) -> bool:
-    return is_selectable(course, now) and has_autonomous_sign(course) and course.category != "其他方面"
+def is_auto_select_candidate(course: BoyaCourse, now: datetime, ignore_selected: bool = False) -> bool:
+    return is_selectable(course, now, ignore_selected=ignore_selected) and has_autonomous_sign(course) and course.category != "其他方面"
 
 
-def auto_select_exclusion_reason(course: BoyaCourse, now: datetime) -> str | None:
-    if course.selected:
+def auto_select_exclusion_reason(course: BoyaCourse, now: datetime, ignore_selected: bool = False) -> str | None:
+    if course.selected and not ignore_selected:
         return "已选"
     if not has_autonomous_sign(course):
         return "常规签到或无位置配置"
