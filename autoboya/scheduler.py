@@ -12,7 +12,7 @@ from .config import ACTION_JOURNAL_FILE, RUN_PID_FILE, STOP_FILE
 from .exceptions import SessionExpired
 from .logging import log_event, mask_username
 from .models import ActionResult, AutomationDecision, BoyaCourse, UserRecord
-from .rules import is_auto_select_candidate, random_point_in_radius, sign_window_for
+from .rules import has_autonomous_sign, is_auto_select_candidate, random_point_in_radius, sign_window_for
 from .session import ensure_bykc_client, force_login_bykc_client
 from .storage import AutoBoyaStore
 
@@ -30,9 +30,11 @@ def decide_actions(
         AutomationDecision(action="select", course_id=course.id)
         for course in courses
         if is_auto_select_candidate(course, now, ignore_selected=True)
-    )
+        )
     for username, selected_courses in selected_by_user.items():
         for course in selected_courses:
+            if not has_autonomous_sign(course):
+                continue
             if sign_window_for(course, 1, now):
                 decisions.append(AutomationDecision(action="sign", course_id=course.id, username=username))
             if sign_window_for(course, 2, now):
@@ -60,10 +62,7 @@ class AutomationRunner:
                         self.refresh_once()
                         last_refresh = now
                     decisions = self.scan_once()
-                    self.log_heartbeat(
-                        decisions,
-                        next_refresh_seconds=int(max(0, 3600 - (time.time() - last_refresh))),
-                    )
+                    self.log_heartbeat(decisions)
                     self.execute_decisions(decisions)
                 except Exception as exc:
                     log_event(logger, logging.ERROR, "automation loop failed", error=exc)
@@ -104,17 +103,22 @@ class AutomationRunner:
         self.refresh_once()
         return self.execute_decisions(self.scan_once())
 
-    def log_heartbeat(self, decisions: list[AutomationDecision], next_refresh_seconds: int) -> None:
+    def log_heartbeat(self, decisions: list[AutomationDecision]) -> None:
         users = [user for user in self.store.user_records() if user.enabled]
-        masked_users = ",".join(mask_username(user.username) for user in users) or "<none>"
-        log_event(
-            logger,
-            logging.INFO,
-            "automation heartbeat",
-            users=masked_users,
-            decisions=len(decisions),
-            next_refresh_seconds=next_refresh_seconds,
-        )
+        auto_check_by_user: dict[str, set[int]] = {user.username: set() for user in users}
+        for decision in decisions:
+            if decision.action not in {"sign", "signout"} or not decision.username:
+                continue
+            if decision.username in auto_check_by_user:
+                auto_check_by_user[decision.username].add(decision.course_id)
+        for user in users:
+            log_event(
+                logger,
+                logging.INFO,
+                "automation heartbeat",
+                user=mask_username(user.username),
+                auto_boya_check=len(auto_check_by_user[user.username]),
+            )
 
     def execute_decisions(self, decisions: list[AutomationDecision]) -> list[ActionResult]:
         results: list[ActionResult] = []

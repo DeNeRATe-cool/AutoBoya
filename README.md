@@ -12,7 +12,7 @@ AutoBoya 是一个用于北航博雅系统的 Python 命令行工具。它通过
 
 ## 快速开始
 
-PyPI 包名：[`autoboya`](https://pypi.org/project/autoboya/)（当前版本 `0.1.3`）。
+PyPI 包名：[`autoboya`](https://pypi.org/project/autoboya/)（当前版本 `0.1.4`）。
 
 ```bash
 # 1. 从 PyPI 安装
@@ -124,7 +124,7 @@ autoboya run-once
 autoboya stop
 ```
 
-`autoboya run` 会启动后台进程后立即返回，不会在当前终端持续输出循环日志。后台日志写入 `~/.autoboya/logs/autoboya.log`，可以用 `autoboya logs tail` 查看。后台每分钟扫描本地缓存时会写入 `automation heartbeat`，其中包含本轮参与轮询的已启用用户、命中的动作数量和距离下次远端刷新约多少秒。`autoboya run-once` 仍在当前终端执行单轮扫描，适合调试。
+`autoboya run` 会启动后台进程后立即返回，不会在当前终端持续输出循环日志。后台日志写入 `~/.autoboya/logs/autoboya.log`，可以用 `autoboya logs tail` 查看。后台每分钟扫描本地缓存时会为每个已启用用户写入一条 `automation heartbeat`，其中 `auto_boya_check` 表示该用户当前有几门自主签到课程处于可自动签到/签退窗口内；常规签到或没有位置签到配置的课程不会计入。`autoboya run-once` 仍在当前终端执行单轮扫描，适合调试。
 
 手动操作：
 
