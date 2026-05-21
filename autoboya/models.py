@@ -11,6 +11,7 @@ class UserRecord:
     password_ref: str | None = None
     unsafe_password: bool = False
     enabled: bool = True
+    campus: str = "北京"
 
 
 @dataclass

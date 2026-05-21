@@ -103,11 +103,15 @@ class AutomationRunner:
         results: list[ActionResult] = []
         selected_raw = self.cache.load_selected()
         selected_by_user = self._selected_by_user(selected_raw)
+        courses_by_id = {course.id: course for course in self.cache.parsed_courses()}
         journal = self.store.load_json(ACTION_JOURNAL_FILE, {})
         users = [user for user in self.store.user_records() if user.enabled]
         for decision in decisions:
             if decision.action == "select":
+                course = courses_by_id.get(decision.course_id)
                 for user in users:
+                    if course and not course_matches_user_campus(course, user):
+                        continue
                     if user_has_selected(selected_by_user, user.username, decision.course_id):
                         continue
                     key = journal_key(user.username, "select", decision.course_id)
@@ -188,6 +192,37 @@ def journal_key(username: str, action: str, course_id: int, when: datetime | Non
 
 def user_has_selected(selected_by_user: dict[str, list[BoyaCourse]], username: str, course_id: int) -> bool:
     return any(course.id == course_id for course in selected_by_user.get(username, []))
+
+
+def course_matches_user_campus(course: BoyaCourse, user: UserRecord) -> bool:
+    is_hangzhou = is_hangzhou_course(course)
+    return is_hangzhou if user.campus == "杭州" else not is_hangzhou
+
+
+def is_hangzhou_course(course: BoyaCourse) -> bool:
+    values = [
+        course.name,
+        course.location,
+        course.campus,
+    ]
+    if isinstance(course.raw, dict):
+        values.extend(
+            [
+                course.raw.get("courseName"),
+                course.raw.get("coursePosition"),
+                course.raw.get("courseCampus"),
+                course.raw.get("courseCampusList"),
+            ]
+        )
+    return any("杭州" in stringify_campus_value(value) for value in values)
+
+
+def stringify_campus_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
 
 
 def current_semester_window(config: dict[str, object]) -> tuple[str, str]:

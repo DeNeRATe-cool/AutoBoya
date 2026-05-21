@@ -97,6 +97,43 @@ def test_execute_decisions_skips_users_who_already_selected(monkeypatch, tmp_pat
     assert selected_users == ["new-user"]
 
 
+def test_execute_decisions_filters_auto_select_by_user_campus(monkeypatch, tmp_path):
+    store = AutoBoyaStore(tmp_path / ".autoboya")
+    store.init()
+    store.save_users(
+        [
+            {"username": "beijing-user", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True, "campus": "北京"},
+            {"username": "hangzhou-user", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True, "campus": "杭州"},
+        ]
+    )
+    store.save_json("cache/selected.json", {"beijing-user": [], "hangzhou-user": []})
+    store.save_json(
+        "cache/courses.json",
+        [
+            {"id": 1001, "courseName": "杭州课程", "coursePosition": "杭州校区体育馆", "courseCampusList": ["杭州校区"]},
+            {"id": 1002, "courseName": "北京课程", "coursePosition": "学院路主楼", "courseCampusList": ["全部校区"]},
+        ],
+    )
+    selected = []
+
+    def fake_select(self, user, course_id):
+        selected.append((user.username, course_id))
+        from autoboya.models import ActionResult
+
+        return ActionResult(user.username, "select", course_id, True, "selected")
+
+    monkeypatch.setattr(AutomationRunner, "_select_for_user", fake_select)
+
+    AutomationRunner(store).execute_decisions(
+        [
+            AutomationDecision(action="select", course_id=1001),
+            AutomationDecision(action="select", course_id=1002),
+        ]
+    )
+
+    assert selected == [("hangzhou-user", 1001), ("beijing-user", 1002)]
+
+
 def test_refresh_once_auto_logs_in_when_session_missing(monkeypatch, tmp_path):
     store = AutoBoyaStore(tmp_path / ".autoboya")
     store.init()

@@ -50,7 +50,7 @@ class AutoBoyaStore:
         self.save_json(USERS_FILE, users)
 
     def user_records(self) -> list[UserRecord]:
-        return [UserRecord(**item) for item in self.load_users()]
+        return [UserRecord(**{**item, "campus": item.get("campus") or "北京"}) for item in self.load_users()]
 
     def get_user(self, username: str) -> UserRecord | None:
         for user in self.user_records():

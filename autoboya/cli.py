@@ -55,11 +55,14 @@ def init() -> None:
 @user_app.command("add", help="添加账号并保存密码。默认优先保存到系统钥匙串。")
 def user_add(
     username: str = typer.Argument(..., help="学号或统一认证账号。"),
+    campus: str = typer.Option("北京", "--campus", help="用户所属校区：北京或杭州。后台自动选课会按此过滤课程。"),
     password_stdin: bool = typer.Option(False, "--password-stdin", help="从标准输入读取密码，适合脚本使用。"),
     unsafe_store_password: bool = typer.Option(False, "--unsafe-store-password", help="钥匙串不可用时明文保存到 ~/.autoboya/secrets.json。"),
 ) -> None:
     store = AutoBoyaStore()
     store.init()
+    if campus not in {"北京", "杭州"}:
+        raise typer.BadParameter("--campus must be 北京 or 杭州")
     password = sys.stdin.readline().rstrip("\n") if password_stdin else getpass.getpass("Password: ")
     password_ref = "keyring"
     unsafe = False
@@ -69,7 +72,7 @@ def user_add(
         store.save_unsafe_password(username, password)
         password_ref = "unsafe-file"
         unsafe = True
-    store.upsert_user(UserRecord(username=username, password_ref=password_ref, unsafe_password=unsafe))
+    store.upsert_user(UserRecord(username=username, password_ref=password_ref, unsafe_password=unsafe, campus=campus))
     typer.echo(f"Added user {mask(username)}")
 
 
@@ -83,7 +86,7 @@ def user_list() -> None:
         return
     for user in users:
         status = "enabled" if user.enabled else "disabled"
-        typer.echo(f"{mask(user.username)} {status} password={user.password_ref or 'missing'}")
+        typer.echo(f"{mask(user.username)} {status} campus={user.campus} password={user.password_ref or 'missing'}")
 
 
 @user_app.command("remove", help="移除本地账号记录。")
