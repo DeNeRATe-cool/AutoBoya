@@ -1,3 +1,11 @@
+📡 **产品集**
+
+> **[AutoTD](https://github.com/DeNeRATe-cool/autoTD)**: BUAA TD PyPI
+> 
+> **[AutoBoya](https://github.com/DeNeRATe-cool/AutoBoya)**: 北航博雅课程命令行工具，支持后台运行、自动选课、签到与签退，实现博雅自由
+>
+> **[AutoSign](https://github.com/DeNeRATe-cool/AutoSign)**: 北航 BUAA iClass 多账号自动签到 CLI（开机自启、自动签到、多账号配置、跨平台支持、免费全天托管服务）
+
 # AutoBoya
 
 <p align="center">
