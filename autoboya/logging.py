@@ -23,18 +23,18 @@ def mask_username(username: str) -> str:
     return username[:3] + "***"
 
 
-def configure_logging(store: AutoBoyaStore | None = None, verbose: bool = False) -> None:
+def configure_logging(store: AutoBoyaStore | None = None, verbose: bool = False, console: bool = True) -> None:
     store = store or AutoBoyaStore()
     store.init()
     log_path: Path = store.path(LOG_FILE)
     level = std_logging.DEBUG if verbose else std_logging.INFO
+    handlers: list[std_logging.Handler] = [std_logging.FileHandler(log_path, encoding="utf-8")]
+    if console:
+        handlers.append(std_logging.StreamHandler())
     std_logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[
-            std_logging.FileHandler(log_path, encoding="utf-8"),
-            std_logging.StreamHandler(),
-        ],
+        handlers=handlers,
         force=True,
     )
 

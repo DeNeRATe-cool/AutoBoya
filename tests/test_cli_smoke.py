@@ -71,3 +71,27 @@ def test_courses_refresh_without_user_refreshes_all_enabled_users(monkeypatch, t
         ("u2", "selected"),
         ("u2", "stats"),
     ]
+
+
+def test_run_starts_background_worker_without_entering_loop(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTOBOYA_HOME", str(tmp_path / ".autoboya"))
+    popen_calls = []
+
+    class FakePopen:
+        pid = 4321
+
+        def __init__(self, args, **kwargs):
+            popen_calls.append((args, kwargs))
+
+    def fail_run_forever(self):
+        raise AssertionError("run should not enter foreground loop")
+
+    monkeypatch.setattr(cli.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(cli.AutomationRunner, "run_forever", fail_run_forever)
+
+    result = CliRunner().invoke(app, ["run"])
+
+    assert result.exit_code == 0
+    assert "background" in result.output
+    assert "4321" in result.output
+    assert popen_calls

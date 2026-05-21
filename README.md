@@ -12,7 +12,7 @@ AutoBoya 是一个用于北航博雅系统的 Python 命令行工具。它通过
 
 ## 快速开始
 
-PyPI 包名：[`autoboya`](https://pypi.org/project/autoboya/)（当前版本 `0.1.1`）。
+PyPI 包名：[`autoboya`](https://pypi.org/project/autoboya/)（当前版本 `0.1.2`）。
 
 ```bash
 # 1. 从 PyPI 安装
@@ -123,6 +123,8 @@ autoboya run
 autoboya run-once
 autoboya stop
 ```
+
+`autoboya run` 会启动后台进程后立即返回，不会在当前终端持续输出循环日志。后台日志写入 `~/.autoboya/logs/autoboya.log`，可以用 `autoboya logs tail` 查看。`autoboya run-once` 仍在当前终端执行单轮扫描，适合调试。
 
 手动操作：
 

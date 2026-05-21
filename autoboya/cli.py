@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -275,8 +277,34 @@ def stats(
 
 @app.command(help="启动后台自动化循环：每小时刷新、每分钟扫描可选/可签到/可签退动作。")
 def run() -> None:
-    configure_logging()
-    AutomationRunner(AutoBoyaStore()).run_forever()
+    store = AutoBoyaStore()
+    store.init()
+    process = start_background_worker(store)
+    typer.echo(f"Started autoboya in background pid={process.pid} logs={store.path(LOG_FILE)}")
+
+
+@app.command("run-worker", hidden=True)
+def run_worker() -> None:
+    store = AutoBoyaStore()
+    configure_logging(store, console=False)
+    AutomationRunner(store).run_forever()
+
+
+def start_background_worker(store: AutoBoyaStore) -> subprocess.Popen:
+    log_path = store.path(LOG_FILE)
+    args = [sys.executable, "-m", "autoboya", "run-worker"]
+    with log_path.open("a", encoding="utf-8") as log:
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": log,
+            "stderr": subprocess.STDOUT,
+            "close_fds": os.name != "nt",
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        else:
+            kwargs["start_new_session"] = True
+        return subprocess.Popen(args, **kwargs)
 
 
 @app.command(help="请求停止后台自动化循环。")
