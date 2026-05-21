@@ -10,7 +10,7 @@ from typing import Iterable
 from .cache import CourseCache
 from .config import ACTION_JOURNAL_FILE, RUN_PID_FILE, STOP_FILE
 from .exceptions import SessionExpired
-from .logging import log_event
+from .logging import log_event, mask_username
 from .models import ActionResult, AutomationDecision, BoyaCourse, UserRecord
 from .rules import is_auto_select_candidate, random_point_in_radius, sign_window_for
 from .session import ensure_bykc_client, force_login_bykc_client
@@ -59,7 +59,12 @@ class AutomationRunner:
                     if now - last_refresh >= 3600:
                         self.refresh_once()
                         last_refresh = now
-                    self.execute_decisions(self.scan_once())
+                    decisions = self.scan_once()
+                    self.log_heartbeat(
+                        decisions,
+                        next_refresh_seconds=int(max(0, 3600 - (time.time() - last_refresh))),
+                    )
+                    self.execute_decisions(decisions)
                 except Exception as exc:
                     log_event(logger, logging.ERROR, "automation loop failed", error=exc)
                 time.sleep(60)
@@ -98,6 +103,18 @@ class AutomationRunner:
     def run_once(self) -> list[ActionResult]:
         self.refresh_once()
         return self.execute_decisions(self.scan_once())
+
+    def log_heartbeat(self, decisions: list[AutomationDecision], next_refresh_seconds: int) -> None:
+        users = [user for user in self.store.user_records() if user.enabled]
+        masked_users = ",".join(mask_username(user.username) for user in users) or "<none>"
+        log_event(
+            logger,
+            logging.INFO,
+            "automation heartbeat",
+            users=masked_users,
+            decisions=len(decisions),
+            next_refresh_seconds=next_refresh_seconds,
+        )
 
     def execute_decisions(self, decisions: list[AutomationDecision]) -> list[ActionResult]:
         results: list[ActionResult] = []

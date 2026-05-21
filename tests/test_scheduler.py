@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 
 from autoboya.models import BoyaCourse
 from autoboya.scheduler import AutomationDecision, AutomationRunner, decide_actions
@@ -132,6 +133,30 @@ def test_execute_decisions_filters_auto_select_by_user_campus(monkeypatch, tmp_p
     )
 
     assert selected == [("hangzhou-user", 1001), ("beijing-user", 1002)]
+
+
+def test_heartbeat_logs_polled_users_and_decision_count(caplog, tmp_path):
+    store = AutoBoyaStore(tmp_path / ".autoboya")
+    store.init()
+    store.save_users(
+        [
+            {"username": "22375080", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True},
+            {"username": "23371098", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True},
+            {"username": "disabled", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": False},
+        ]
+    )
+
+    runner = AutomationRunner(store)
+
+    with caplog.at_level(logging.INFO, logger="autoboya.scheduler"):
+        runner.log_heartbeat([AutomationDecision(action="select", course_id=1001)], next_refresh_seconds=3590)
+
+    message = caplog.text
+    assert "automation heartbeat" in message
+    assert "users=223***,233***" in message
+    assert "disabled" not in message
+    assert "decisions=1" in message
+    assert "next_refresh_seconds=3590" in message
 
 
 def test_refresh_once_auto_logs_in_when_session_missing(monkeypatch, tmp_path):

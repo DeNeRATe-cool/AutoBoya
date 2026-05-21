@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autoboya"
-version = "0.1.2"
+version = "0.1.3"
 description = "北航博雅 WebVPN 命令行工具，支持课程缓存、自主签到课程自动选课、签到与签退"
 readme = "README.md"
 requires-python = ">=3.11"
