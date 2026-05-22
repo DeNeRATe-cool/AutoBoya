@@ -1,8 +1,15 @@
 from datetime import datetime
 import logging
 
+from autoboya.exceptions import SelectionLimitReached
 from autoboya.models import BoyaCourse
-from autoboya.scheduler import AutomationDecision, AutomationRunner, decide_actions
+from autoboya.scheduler import (
+    AutomationDecision,
+    AutomationRunner,
+    decide_actions,
+    select_failure_attempts,
+    select_failure_key,
+)
 from autoboya.storage import AutoBoyaStore
 
 
@@ -167,6 +174,56 @@ def test_execute_decisions_filters_auto_select_by_user_campus(monkeypatch, tmp_p
     assert selected == [("hangzhou-user", 1001), ("beijing-user", 1002)]
 
 
+def test_execute_decisions_stops_auto_select_after_three_business_failures(monkeypatch, tmp_path):
+    store = AutoBoyaStore(tmp_path / ".autoboya")
+    store.init()
+    store.save_users([{"username": "test-user", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True}])
+    store.save_json("cache/selected.json", {"test-user": []})
+    attempts = []
+
+    def fake_select(self, user, course_id):
+        attempts.append((user.username, course_id))
+        from autoboya.models import ActionResult
+
+        return ActionResult(user.username, "select", course_id, False, "选课时间冲突", terminal=True)
+
+    monkeypatch.setattr(AutomationRunner, "_select_for_user", fake_select)
+    runner = AutomationRunner(store)
+    decision = [AutomationDecision(action="select", course_id=9675)]
+
+    for _ in range(4):
+        runner.execute_decisions(decision)
+
+    journal = store.load_json("cache/action_journal.json", {})
+    assert attempts == [("test-user", 9675), ("test-user", 9675), ("test-user", 9675)]
+    assert select_failure_attempts(journal, "test-user", 9675) == 3
+    assert journal[select_failure_key("test-user", 9675)]["disabled"] is True
+
+
+def test_execute_decisions_does_not_count_transient_select_failures(monkeypatch, tmp_path):
+    store = AutoBoyaStore(tmp_path / ".autoboya")
+    store.init()
+    store.save_users([{"username": "test-user", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True}])
+    store.save_json("cache/selected.json", {"test-user": []})
+    attempts = []
+
+    def fake_select(self, user, course_id):
+        attempts.append((user.username, course_id))
+        from autoboya.models import ActionResult
+
+        return ActionResult(user.username, "select", course_id, False, "The read operation timed out")
+
+    monkeypatch.setattr(AutomationRunner, "_select_for_user", fake_select)
+    runner = AutomationRunner(store)
+
+    for _ in range(4):
+        runner.execute_decisions([AutomationDecision(action="select", course_id=9675)])
+
+    journal = store.load_json("cache/action_journal.json", {})
+    assert attempts == [("test-user", 9675)] * 4
+    assert select_failure_key("test-user", 9675) not in journal
+
+
 def test_heartbeat_logs_per_user_auto_check_count_only(caplog, tmp_path):
     store = AutoBoyaStore(tmp_path / ".autoboya")
     store.init()
@@ -274,6 +331,23 @@ def test_select_success_refreshes_user_cache(monkeypatch, tmp_path):
     assert result.ok
     assert store.load_json("cache/selected.json")["test-user"][0]["id"] == 1001
     assert store.load_json("cache/statistics.json")["test-user"]["validCount"] == 1
+
+
+def test_select_business_error_is_terminal(monkeypatch, tmp_path):
+    store = AutoBoyaStore(tmp_path / ".autoboya")
+    store.init()
+    store.save_users([{"username": "test-user", "password_ref": "unsafe-file", "unsafe_password": True, "enabled": True}])
+
+    class FakeClient:
+        def select_course(self, course_id):
+            raise SelectionLimitReached("选课时间冲突")
+
+    monkeypatch.setattr("autoboya.scheduler.ensure_bykc_client", lambda store, username, captcha_provider=None: FakeClient())
+    result = AutomationRunner(store)._select_for_user(store.user_records()[0], 1001)
+
+    assert not result.ok
+    assert result.terminal
+    assert result.message == "选课时间冲突"
 
 
 def test_sign_success_refreshes_user_cache(monkeypatch, tmp_path):

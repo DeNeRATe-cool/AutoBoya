@@ -60,3 +60,4 @@ class ActionResult:
     course_id: int
     ok: bool
     message: str
+    terminal: bool = False

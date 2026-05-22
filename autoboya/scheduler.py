@@ -9,7 +9,7 @@ from typing import Iterable
 
 from .cache import CourseCache
 from .config import ACTION_JOURNAL_FILE, RUN_PID_FILE, STOP_FILE
-from .exceptions import SessionExpired
+from .exceptions import AlreadySelected, BoyaApiError, CourseFull, CourseNotOpen, SelectionLimitReached, SessionExpired
 from .logging import log_event, mask_username
 from .models import ActionResult, AutomationDecision, BoyaCourse, UserRecord
 from .rules import has_autonomous_sign, is_auto_select_candidate, random_point_in_radius, sign_window_for
@@ -17,6 +17,7 @@ from .session import ensure_bykc_client, force_login_bykc_client
 from .storage import AutoBoyaStore
 
 logger = logging.getLogger(__name__)
+SELECT_FAILURE_LIMIT = 3
 
 
 def decide_actions(
@@ -30,7 +31,7 @@ def decide_actions(
         AutomationDecision(action="select", course_id=course.id)
         for course in courses
         if is_auto_select_candidate(course, now, ignore_selected=True)
-        )
+    )
     for username, selected_courses in selected_by_user.items():
         for course in selected_courses:
             if not has_autonomous_sign(course):
@@ -138,10 +139,26 @@ class AutomationRunner:
                     key = journal_key(user.username, "select", decision.course_id)
                     if journal.get(key):
                         continue
+                    if select_failure_attempts(journal, user.username, decision.course_id) >= SELECT_FAILURE_LIMIT:
+                        continue
                     result = self._select_for_user(user, decision.course_id)
                     results.append(result)
                     if result.ok:
                         journal[key] = result.message
+                        journal.pop(select_failure_key(user.username, decision.course_id), None)
+                    elif result.terminal:
+                        attempts = record_select_failure(journal, user.username, decision.course_id, result.message)
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "auto select failed",
+                            user=mask_username(user.username),
+                            course_id=decision.course_id,
+                            attempts=attempts,
+                            limit=SELECT_FAILURE_LIMIT,
+                            disabled=attempts >= SELECT_FAILURE_LIMIT,
+                            reason=result.message,
+                        )
                 continue
             username = decision.username
             if not username:
@@ -162,6 +179,10 @@ class AutomationRunner:
             self._with_reauth(user.username, lambda client: client.select_course(course_id))
             self._refresh_user_cache(user.username)
             return ActionResult(user.username, "select", course_id, True, "selected")
+        except BoyaApiError as exc:
+            return ActionResult(user.username, "select", course_id, False, str(exc), terminal=exc.status != "decode_error")
+        except (AlreadySelected, CourseFull, CourseNotOpen, SelectionLimitReached) as exc:
+            return ActionResult(user.username, "select", course_id, False, str(exc), terminal=True)
         except Exception as exc:
             return ActionResult(user.username, "select", course_id, False, str(exc))
 
@@ -209,6 +230,29 @@ class AutomationRunner:
 def journal_key(username: str, action: str, course_id: int, when: datetime | None = None) -> str:
     when = when or datetime.now()
     return f"{when.date()}:{username}:{action}:{course_id}"
+
+
+def select_failure_key(username: str, course_id: int) -> str:
+    return f"{username}:select_failed:{course_id}"
+
+
+def select_failure_attempts(journal: dict[str, object], username: str, course_id: int) -> int:
+    value = journal.get(select_failure_key(username, course_id))
+    if isinstance(value, dict):
+        attempts = value.get("attempts")
+        return attempts if isinstance(attempts, int) else 0
+    return value if isinstance(value, int) else 0
+
+
+def record_select_failure(journal: dict[str, object], username: str, course_id: int, message: str) -> int:
+    attempts = select_failure_attempts(journal, username, course_id) + 1
+    journal[select_failure_key(username, course_id)] = {
+        "attempts": attempts,
+        "message": message,
+        "last_attempt": datetime.now().isoformat(timespec="seconds"),
+        "disabled": attempts >= SELECT_FAILURE_LIMIT,
+    }
+    return attempts
 
 
 def user_has_selected(selected_by_user: dict[str, list[BoyaCourse]], username: str, course_id: int) -> bool:
